@@ -314,13 +314,29 @@ def webhook():
 def set_webhook():
     url = f"https://{RAILWAY_DOMAIN}/{TOKEN}"
     try:
+        # Полностью очищаем старый webhook и очередь обновлений
         bot.delete_webhook(drop_pending_updates=True)
-        bot.set_webhook(url=url)
-        logger.info(f"Webhook успешно установлен: {url}")
+        logger.info("Старый webhook удалён + очередь очищена")
+        
+        # Проверяем, удалён ли webhook
+        info = bot.get_webhook_info()
+        logger.info(f"Webhook info после удаления: {info}")
+        
+        # Устанавливаем новый
+        success = bot.set_webhook(url=url, drop_pending_updates=True)
+        if success:
+            logger.info(f"Webhook успешно установлен: {url}")
+        else:
+            logger.error("Не удалось установить webhook!")
     except Exception as e:
-        logger.error(f"Ошибка установки webhook: {e}")
+        logger.error(f"Ошибка при установке webhook: {e}")
 
 if __name__ == '__main__':
     set_webhook()
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
+
+@bot.message_handler(func=lambda message: True)
+def echo_all(message):
+    bot.reply_to(message, f"Тест: я получил твое сообщение '{message.text}' 🔥")
+    logger.info(f"Эхо от {message.chat.id}: {message.text}")
