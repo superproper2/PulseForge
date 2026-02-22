@@ -1,4 +1,4 @@
-# bot.py — PulseForge (обновлённая версия с фиксами, логами и надёжной БД)
+# bot.py — PulseForge (обновлённая версия с GET в webhook для health check)
 
 import os
 import json
@@ -7,12 +7,11 @@ import io
 import matplotlib.pyplot as plt
 import sqlite3
 from datetime import datetime
-import logging  # для отладки в логах Railway
+import logging
 from flask import Flask, request, abort
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Настройка логов — видно в Railway Logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ if not RAILWAY_DOMAIN:
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# Путь к БД — должен быть в volume /data
+# Путь к БД
 DB_PATH = '/data/pulseforge.db'
 
 # ====================== БАЗА ДАННЫХ ======================
@@ -301,28 +300,34 @@ def choose_sport(call):
 def back_to_start(call):
     start(call.message)
 
-# ====================== WEBHOOK ======================
-@app.route(f'/{TOKEN}', methods=['POST'])
+# ====================== WEBHOOK (с поддержкой GET для health check) ======================
+@app.route(f'/{TOKEN}', methods=['GET', 'POST'])
 def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
+    if request.method == 'GET':
+        # Health check от Telegram — возвращаем 200 OK
+        logger.info("GET health check от Telegram")
         return 'OK', 200
-    abort(403)
+    
+    if request.method == 'POST':
+        if request.headers.get('content-type') == 'application/json':
+            json_string = request.get_data().decode('utf-8')
+            update = telebot.types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+            return 'OK', 200
+        else:
+            abort(403)
+    
+    abort(405)
 
 def set_webhook():
     url = f"https://{RAILWAY_DOMAIN}/{TOKEN}"
     try:
-        # Полностью очищаем старый webhook и очередь обновлений
         bot.delete_webhook(drop_pending_updates=True)
         logger.info("Старый webhook удалён + очередь очищена")
         
-        # Проверяем, удалён ли webhook
         info = bot.get_webhook_info()
         logger.info(f"Webhook info после удаления: {info}")
         
-        # Устанавливаем новый
         success = bot.set_webhook(url=url, drop_pending_updates=True)
         if success:
             logger.info(f"Webhook успешно установлен: {url}")
@@ -335,8 +340,3 @@ if __name__ == '__main__':
     set_webhook()
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-
-@bot.message_handler(func=lambda message: True)
-def echo_all(message):
-    bot.reply_to(message, f"Тест: я получил твое сообщение '{message.text}' 🔥")
-    logger.info(f"Эхо от {message.chat.id}: {message.text}")
