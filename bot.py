@@ -1,4 +1,4 @@
-# bot.py — PulseForge (обновлённая версия с GET в webhook для health check)
+# bot.py — PulseForge (версия с polling для надёжности на Railway)
 
 import os
 import json
@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import sqlite3
 from datetime import datetime
 import logging
-from flask import Flask, request, abort
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -18,19 +17,15 @@ logger = logging.getLogger(__name__)
 # ====================== CONFIG ======================
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEY = os.getenv('API_SPORTS_KEY')
-RAILWAY_DOMAIN = os.getenv('RAILWAY_PUBLIC_DOMAIN')
 
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не указан!")
 if not API_KEY:
     raise ValueError("API_SPORTS_KEY не указан!")
-if not RAILWAY_DOMAIN:
-    raise ValueError("RAILWAY_PUBLIC_DOMAIN не указан!")
 
 bot = telebot.TeleBot(TOKEN)
-app = Flask(__name__)
 
-# Путь к БД
+# Путь к БД в volume
 DB_PATH = '/data/pulseforge.db'
 
 # ====================== БАЗА ДАННЫХ ======================
@@ -300,43 +295,13 @@ def choose_sport(call):
 def back_to_start(call):
     start(call.message)
 
-# ====================== WEBHOOK (с поддержкой GET для health check) ======================
-@app.route(f'/{TOKEN}', methods=['GET', 'POST'])
-def webhook():
-    if request.method == 'GET':
-        # Health check от Telegram — возвращаем 200 OK
-        logger.info("GET health check от Telegram")
-        return 'OK', 200
-    
-    if request.method == 'POST':
-        if request.headers.get('content-type') == 'application/json':
-            json_string = request.get_data().decode('utf-8')
-            update = telebot.types.Update.de_json(json_string)
-            bot.process_new_updates([update])
-            return 'OK', 200
-        else:
-            abort(403)
-    
-    abort(405)
-
-def set_webhook():
-    url = f"https://{RAILWAY_DOMAIN}/{TOKEN}"
+# ====================== POLLING (временный режим для запуска) ======================
+if __name__ == '__main__':
     try:
         bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Старый webhook удалён + очередь очищена")
-        
-        info = bot.get_webhook_info()
-        logger.info(f"Webhook info после удаления: {info}")
-        
-        success = bot.set_webhook(url=url, drop_pending_updates=True)
-        if success:
-            logger.info(f"Webhook успешно установлен: {url}")
-        else:
-            logger.error("Не удалось установить webhook!")
+        logger.info("Webhook удалён, запускаем polling")
     except Exception as e:
-        logger.error(f"Ошибка при установке webhook: {e}")
-
-if __name__ == '__main__':
-    set_webhook()
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+        logger.warning(f"Ошибка удаления webhook: {e}")
+    
+    logger.info("Polling запущен — бот должен отвечать мгновенно")
+    bot.polling(none_stop=True, interval=0, timeout=20)
