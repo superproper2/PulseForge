@@ -1,4 +1,4 @@
-# bot.py — PulseForge (финальная версия на данный момент)
+# bot.py — PulseForge (обновлённая версия с фиксами, логами и надёжной БД)
 
 import os
 import json
@@ -7,75 +7,98 @@ import io
 import matplotlib.pyplot as plt
 import sqlite3
 from datetime import datetime
+import logging  # для отладки в логах Railway
 from flask import Flask, request, abort
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+# Настройка логов — видно в Railway Logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ====================== CONFIG ======================
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEY = os.getenv('API_SPORTS_KEY')
 RAILWAY_DOMAIN = os.getenv('RAILWAY_PUBLIC_DOMAIN')
 
-if not TOKEN or not API_KEY or not RAILWAY_DOMAIN:
-    raise ValueError("Не указаны TELEGRAM_BOT_TOKEN, API_SPORTS_KEY или RAILWAY_PUBLIC_DOMAIN!")
+if not TOKEN:
+    raise ValueError("TELEGRAM_BOT_TOKEN не указан!")
+if not API_KEY:
+    raise ValueError("API_SPORTS_KEY не указан!")
+if not RAILWAY_DOMAIN:
+    raise ValueError("RAILWAY_PUBLIC_DOMAIN не указан!")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# Путь к базе в Railway Volume
+# Путь к БД — должен быть в volume /data
 DB_PATH = '/data/pulseforge.db'
 
-# Инициализация БД
+# ====================== БАЗА ДАННЫХ ======================
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            chat_id INTEGER PRIMARY KEY,
-            sport TEXT,
-            region TEXT,
-            country TEXT,
-            league_id TEXT,
-            updated_at TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                chat_id INTEGER PRIMARY KEY,
+                sport TEXT,
+                region TEXT,
+                country TEXT,
+                league_id TEXT,
+                updated_at TEXT
+            )
+        ''')
+        conn.commit()
+        logger.info(f"База данных успешно инициализирована: {DB_PATH}")
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка инициализации БД: {e}")
+    finally:
+        conn.close()
 
 init_db()
 
-# ====================== DB HELPERS ======================
 def save_user_state(chat_id, data):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO users (chat_id, sport, region, country, league_id, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (
-        chat_id,
-        data.get('sport'),
-        data.get('region'),
-        data.get('country'),
-        data.get('league_id'),
-        datetime.utcnow().isoformat()
-    ))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            INSERT OR REPLACE INTO users (chat_id, sport, region, country, league_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            chat_id,
+            data.get('sport'),
+            data.get('region'),
+            data.get('country'),
+            data.get('league_id'),
+            datetime.utcnow().isoformat()
+        ))
+        conn.commit()
+        logger.info(f"Состояние сохранено для chat_id={chat_id}")
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка сохранения состояния: {e}")
+    finally:
+        conn.close()
 
 def get_user_state(chat_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT sport, region, country, league_id FROM users WHERE chat_id = ?', (chat_id,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return {
-            'sport': row[0],
-            'region': row[1],
-            'country': row[2],
-            'league_id': row[3]
-        }
-    return {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('SELECT sport, region, country, league_id FROM users WHERE chat_id = ?', (chat_id,))
+        row = c.fetchone()
+        if row:
+            return {
+                'sport': row[0],
+                'region': row[1],
+                'country': row[2],
+                'league_id': row[3]
+            }
+        return {}
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка чтения состояния: {e}")
+        return {}
+    finally:
+        conn.close()
 
 # ====================== HELPERS ======================
 def create_inline_markup(items, callback_prefix, per_row=2):
@@ -109,6 +132,7 @@ def api_request(sport, endpoint, params=None):
     }
     base = base_urls.get(sport)
     if not base:
+        logger.warning(f"Нет базы для спорта: {sport}")
         return None
     url = f"{base}{endpoint}"
     if params:
@@ -117,8 +141,10 @@ def api_request(sport, endpoint, params=None):
         r = requests.get(url, headers={'x-apisports-key': API_KEY}, timeout=10)
         if r.status_code == 200:
             return r.json().get('response', [])
+        logger.warning(f"API ошибка {r.status_code}: {r.text}")
         return []
-    except:
+    except Exception as e:
+        logger.error(f"Ошибка запроса API: {e}")
         return []
 
 # ====================== MATCH & GRAPH ======================
@@ -145,6 +171,9 @@ def generate_form_graph(form):
     return buf
 
 def simple_prognosis(fixture, sport):
+    if not fixture:
+        return "Прогноз недоступен"
+    
     home = fixture['teams']['home']['name']
     home_id = fixture['teams']['home']['id']
     away_id = fixture['teams']['away']['id']
@@ -169,8 +198,8 @@ def simple_prognosis(fixture, sport):
                 a = m['teams']['away']['name']
                 s = f"{m['goals']['home'] or '?'}–{m['goals']['away'] or '?'}"
                 h2h_text += f"{h} {s} {a}\n"
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"H2H ошибка: {e}")
     
     return f"{prog}\n\n{h2h_text}"
 
@@ -232,6 +261,7 @@ def start(message):
         parse_mode='MarkdownV2',
         reply_markup=markup
     )
+    logger.info(f"Команда /start от chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "about_bot")
 def about_bot(call):
@@ -265,6 +295,7 @@ def choose_sport(call):
         chat_id, call.message.message_id,
         parse_mode='MarkdownV2', reply_markup=markup
     )
+    logger.info(f"Выбран спорт: {sport} для chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_start")
 def back_to_start(call):
@@ -282,9 +313,12 @@ def webhook():
 
 def set_webhook():
     url = f"https://{RAILWAY_DOMAIN}/{TOKEN}"
-    bot.remove_webhook()
-    bot.set_webhook(url=url)
-    print(f"Webhook установлен: {url}")
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        bot.set_webhook(url=url)
+        logger.info(f"Webhook успешно установлен: {url}")
+    except Exception as e:
+        logger.error(f"Ошибка установки webhook: {e}")
 
 if __name__ == '__main__':
     set_webhook()
