@@ -336,3 +336,34 @@ if __name__ == '__main__':
     
     logger.info("Polling запущен — бот должен отвечать мгновенно")
     bot.polling(none_stop=True, interval=0, timeout=20)
+
+# Текстовый поиск — ловим любой текст
+@bot.message_handler(content_types=['text'])
+def text_search(message):
+    query = message.text.strip()
+    if len(query) < 3:
+        bot.reply_to(message, "Напиши минимум 3 символа для поиска")
+        return
+    
+    chat_id = message.chat.id
+    state = get_user_state(chat_id)
+    sport = state.get('sport') or 'football'  # по умолчанию футбол
+    
+    logger.info(f"Поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
+    
+    # Пример поиска по командам (расширь по API)
+    teams = api_request(sport, 'teams', {'search': query})
+    if teams:
+        items = [{'name': t['team']['name'], 'id': t['team']['id']} for t in teams[:10]]
+        markup = create_inline_markup(items, "team_search", per_row=1)
+        bot.reply_to(message, f"Найдено команд по '{query}':", reply_markup=markup)
+    else:
+        # Поиск матчей (если команды не найдены)
+        fixtures = api_request(sport, 'fixtures', {'search': query})
+        if fixtures:
+            text = "Найдено матчей:\n"
+            for fx in fixtures[:5]:
+                text += f"{fx['teams']['home']['name']} vs {fx['teams']['away']['name']} ({fx['league']['name']})\n"
+            bot.reply_to(message, text)
+        else:
+            bot.reply_to(message, "Ничего не найдено. Попробуй название команды или лиги")
