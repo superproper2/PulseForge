@@ -401,23 +401,68 @@ def text_search(message):
     
     chat_id = message.chat.id
     state = get_user_state(chat_id)
-    sport = state.get('sport') or 'football'  # по умолчанию футбол
+    sport = state.get('sport') or 'football'
     
-    logger.info(f"Поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
+    logger.info(f"AI-поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
     
-    # Пример поиска по командам (расширь по API)
-    teams = api_request(sport, 'teams', {'search': query})
-    if teams:
-        items = [{'name': t['team']['name'], 'id': t['team']['id']} for t in teams[:10]]
-        markup = create_inline_markup(items, "team_search", per_row=1)
-        bot.reply_to(message, f"Найдено команд по '{query}':", reply_markup=markup)
-    else:
-        # Поиск матчей (если команды не найдены)
-        fixtures = api_request(sport, 'fixtures', {'search': query})
-        if fixtures:
-            text = "Найдено матчей:\n"
-            for fx in fixtures[:5]:
-                text += f"{fx['teams']['home']['name']} vs {fx['teams']['away']['name']} ({fx['league']['name']})\n"
-            bot.reply_to(message, text)
-        else:
-            bot.reply_to(message, "Ничего не найдено. Попробуй название команды или лиги")
+    # Запрос к Grok для понимания запроса
+    grok_prompt = f"""
+    Пользователь ищет спортивную информацию.
+    Запрос: "{query}"
+    
+    Верни в формате JSON:
+    {{
+      "teams": ["команда1", "команда2"] или [],
+      "leagues": ["лига1"] или [],
+      "match_query": "матч Барселона vs Реал" или null,
+      "date_filter": "today", "tomorrow", "yesterday", "live" или null,
+      "sport": "football", "basketball" или null
+    }}
+    
+    Если не понятно — верни пустые массивы.
+    """
+    
+    # Здесь вызов Grok API (замени на свой ключ)
+    # Для теста — пока заглушка
+    grok_response = {  # это заглушка — замени на реальный запрос к API
+        "teams": ["Barcelona", "Real Madrid"],
+        "leagues": [],
+        "match_query": "Barcelona vs Real Madrid",
+        "date_filter": "today",
+        "sport": "football"
+    }
+    
+    # Реальный вызов Grok (пример с requests)
+    # grok_url = "https://api.x.ai/v1/chat/completions"
+    # headers = {"Authorization": f"Bearer {os.getenv('GROK_API_KEY')}"}
+    # payload = {
+    #     "model": "grok-beta",
+    #     "messages": [{"role": "user", "content": grok_prompt}]
+    # }
+    # r = requests.post(grok_url, json=payload, headers=headers)
+    # grok_response = r.json()['choices'][0]['message']['content']
+    # grok_response = json.loads(grok_response)  # парсим JSON
+    
+    # Поиск по командам
+    found = False
+    if grok_response.get('teams'):
+        teams = api_request(sport, 'teams', {'search': grok_response['teams'][0]})
+        if teams:
+            items = [{'name': t['team']['name'], 'id': t['team']['id']} for t in teams[:5]]
+            markup = create_inline_markup(items, "team_search", per_row=1)
+            bot.reply_to(message, f"Найдено команд:", reply_markup=markup)
+            found = True
+    
+    # Поиск по лигам
+    if grok_response.get('leagues'):
+        leagues = api_request(sport, 'leagues', {'search': grok_response['leagues'][0], 'season': 2024})
+        if leagues:
+            items = [{'name': l['league']['name'], 'id': l['league']['id']} for l in leagues[:5]]
+            markup = create_inline_markup(items, "league_search", per_row=1)
+            bot.reply_to(message, f"Найдено лиг:", reply_markup=markup)
+            found = True
+    
+    if not found:
+        bot.reply_to(message, "Ничего не найдено. Попробуй другое название или уточни (например, 'Барселона сегодня')")
+
+
