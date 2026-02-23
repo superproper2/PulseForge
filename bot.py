@@ -1,12 +1,11 @@
-# bot.py — PulseForge (обновление: фикс лиг + эмодзи + fallback)
-
+# bot.py — PulseForge (обновление: фикс лиг + эмодзи + fallback + Grok API + volume perms + deprecation fix)
 import os
 import json
 import requests
 import io
 import matplotlib.pyplot as plt
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone  # Добавлен timezone для фикса deprecation
 import logging
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,7 +16,6 @@ logger = logging.getLogger(__name__)
 # ====================== CONFIG ======================
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEY = os.getenv('API_SPORTS_KEY')
-
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не указан!")
 if not API_KEY:
@@ -27,6 +25,21 @@ bot = telebot.TeleBot(TOKEN)
 
 # Путь к БД в volume
 DB_PATH = '/data/pulseforge.db'
+DB_DIR = os.path.dirname(DB_PATH)
+
+# Фикс прав доступа для Railway volume (запускаем перед init_db)
+def fix_volume_permissions():
+    try:
+        if not os.path.exists(DB_DIR):
+            os.makedirs(DB_DIR, exist_ok=True)
+        os.chmod(DB_DIR, 0o777)  # Полные права на директорию
+        if os.path.exists(DB_PATH):
+            os.chmod(DB_PATH, 0o666)  # RW для всех на файл
+        logger.info("Права на volume /data исправлены")
+    except Exception as e:
+        logger.warning(f"Не удалось исправить права на volume: {e}")
+
+fix_volume_permissions()
 
 # ====================== БАЗА ДАННЫХ ======================
 def init_db():
@@ -65,12 +78,22 @@ def save_user_state(chat_id, data):
             data.get('region'),
             data.get('country'),
             data.get('league_id'),
-            datetime.utcnow().isoformat()
+            datetime.now(timezone.utc).isoformat()  # Фикс deprecation
         ))
         conn.commit()
         logger.info(f"Состояние сохранено для chat_id={chat_id}")
+        
+        # Диагностика: размер и права файла после сохранения
+        if os.path.exists(DB_PATH):
+            size = os.path.getsize(DB_PATH)
+            perms = oct(os.stat(DB_PATH).st_mode)[-3:]
+            logger.info(f"База сохранена | Размер: {size} байт | Права: {perms}")
+        else:
+            logger.error(f"Файл БД НЕ существует после сохранения! Путь: {DB_PATH}")
     except sqlite3.Error as e:
         logger.error(f"Ошибка сохранения состояния: {e}")
+    except Exception as perm_e:
+        logger.error(f"Ошибка проверки файла БД: {perm_e}")
     finally:
         conn.close()
 
@@ -142,14 +165,14 @@ def api_request(sport, endpoint, params=None):
 def start(message):
     chat_id = message.chat.id
     state = get_user_state(chat_id)
-    
+   
     welcome = (
         "PulseForge активирован\n\n"
         "Результаты матчей, аналитика, прогнозы и графики формы команд.\n"
         "Здесь нет ставок — только чистая информация о спорте\n\n"
         "Выбери вид спорта или сразу ищи матч:"
     )
-    
+   
     markup = InlineKeyboardMarkup(row_width=2)
     sports = [
         ("⚽ Футбол", "sport_football"),
@@ -159,12 +182,12 @@ def start(message):
     ]
     for txt, cb in sports:
         markup.add(InlineKeyboardButton(txt, callback_data=cb))
-    
+   
     # НОВАЯ КНОПКА — Поиск матча
     markup.add(InlineKeyboardButton("🔍 Поиск матча", callback_data="search_match"))
-    
+   
     markup.add(InlineKeyboardButton("О PulseForge", callback_data="about_bot"))
-    
+   
     bot.send_message(chat_id, welcome, reply_markup=markup)
     logger.info(f"/start от chat_id={chat_id}")
 
@@ -195,17 +218,17 @@ def about_bot(call):
 def choose_sport(call):
     chat_id = call.message.chat.id
     sport = call.data.split('_')[1]
-    
+   
     state = get_user_state(chat_id)
     state['sport'] = sport
     save_user_state(chat_id, state)
-    
+   
     markup = InlineKeyboardMarkup(row_width=2)
     regions = ['europe', 'america', 'asia', 'africa', 'international']
     for r in regions:
         markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
     add_back_button(markup, "back_to_start")
-    
+   
     bot.edit_message_text(
         f"Выбери регион для {sport.capitalize()}:",
         chat_id,
@@ -218,11 +241,11 @@ def choose_sport(call):
 def choose_region(call):
     chat_id = call.message.chat.id
     region = call.data.split('_')[1]
-    
+   
     state = get_user_state(chat_id)
     state['region'] = region
     save_user_state(chat_id, state)
-    
+   
     # Пример стран (расширь)
     regions_countries = {
         'europe': ['england', 'spain', 'germany', 'italy', 'france'],
@@ -231,7 +254,7 @@ def choose_region(call):
         'africa': ['egypt', 'south africa'],
         'international': ['world'],
     }
-    
+   
     countries = regions_countries.get(region, [])
     if not countries:
         bot.edit_message_text(
@@ -240,11 +263,11 @@ def choose_region(call):
             call.message.message_id
         )
         return
-    
+   
     items = [{'name': c.capitalize(), 'code': c} for c in countries]
     markup = create_inline_markup(items, "country", per_row=2)
     add_back_button(markup, "back_to_region")
-    
+   
     bot.edit_message_text(
         f"Выбери страну в {region.capitalize()}:",
         chat_id,
@@ -257,21 +280,21 @@ def choose_region(call):
 def choose_country(call):
     chat_id = call.message.chat.id
     country = call.data.split('_')[1]
-    
+   
     state = get_user_state(chat_id)
     state['country'] = country
     save_user_state(chat_id, state)
-    
+   
     sport = state.get('sport')
     if not sport:
         bot.answer_callback_query(call.id, "Сначала выбери спорт")
         return
-    
+   
     logger.info(f"Выбрана страна: {country} для спорта {sport} от chat_id={chat_id}")
-    
+   
     # Запрос лиг (сезон 2024 — актуальные данные)
     leagues = api_request(sport, 'leagues', {'country': country, 'season': 2024})
-    
+   
     if not leagues:
         bot.send_message(
             chat_id,
@@ -279,12 +302,16 @@ def choose_country(call):
         )
         logger.info(f"Лиги не найдены для {country} / {sport}")
         return
+   
+    # Фикс парсинга для разных спортов
+    if sport == 'football':
+        items = [{'name': l.get('league', {}).get('name', 'Unknown'), 'id': l.get('league', {}).get('id', '')} for l in leagues[:10]]
+    else:
+        items = [{'name': l.get('name', 'Unknown'), 'id': l.get('id', '')} for l in leagues[:10]]
     
-    # Первые 10 лиг (можно больше)
-    items = [{'name': l['league']['name'], 'id': l['league']['id']} for l in leagues[:10]]
     markup = create_inline_markup(items, "league", per_row=1)
     add_back_button(markup, "back_to_country")
-    
+   
     bot.send_message(
         chat_id,
         f"Выбери лигу в {country.capitalize()}:",
@@ -308,7 +335,7 @@ def back_to_sport(call):
     ]
     for txt, cb in sports:
         markup.add(InlineKeyboardButton(txt, callback_data=cb))
-    
+   
     bot.edit_message_text(
         "Выбери спорт заново:",
         chat_id,
@@ -321,25 +348,24 @@ def back_to_region(call):
     chat_id = call.message.chat.id
     state = get_user_state(chat_id)
     sport = state.get('sport')
-    
+   
     if not sport:
         bot.answer_callback_query(call.id, "Сначала выбери спорт")
         return
-    
+   
     markup = InlineKeyboardMarkup(row_width=2)
     regions = ['europe', 'america', 'asia', 'africa', 'international']
     for r in regions:
         markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
     add_back_button(markup, "back_to_sport")
-    
+   
     bot.edit_message_text(
         f"Выбери регион для {sport.capitalize()}:",
         chat_id,
         call.message.message_id,
         reply_markup=markup
     )
-    
-# ====================== POLLING ======================
+
 @bot.message_handler(content_types=['text'])
 def text_search(message):
     query = message.text.strip()
@@ -378,7 +404,7 @@ def text_search(message):
     }
 
     payload = {
-        "model": "grok-4-latest",           # актуальная модель на 2026 год
+        "model": "grok-4-latest",           # Актуальная модель
         "messages": [
             {
                 "role": "system",
@@ -389,7 +415,7 @@ def text_search(message):
                 "content": grok_prompt
             }
         ],
-        "temperature": 0.2,                 # чуть ниже, чтобы ответ был предсказуемее
+        "temperature": 0.2,
         "max_tokens": 300,
         "stream": False
     }
@@ -438,13 +464,10 @@ def text_search(message):
         bot.reply_to(message, "Что-то пошло не так при поиске через ИИ 😔")
         return
 
-    # ────────────────────────────────────────────────
-    # Дальше обработка ответа Grok (твой код с небольшими улучшениями)
     found = False
 
-    # 1. Поиск по командам
     if grok_response.get('teams'):
-        for team_name in grok_response['teams'][:3]:  # ограничиваем 3 попытками
+        for team_name in grok_response['teams'][:3]:
             teams_data = api_request(sport, 'teams', {'search': team_name})
             if teams_data:
                 items = [{'name': t['team']['name'], 'id': t['team']['id']} for t in teams_data[:5]]
@@ -454,12 +477,10 @@ def text_search(message):
                     found = True
                     break
 
-    # 2. Поиск по лигам
     if not found and grok_response.get('leagues'):
         for league_name in grok_response['leagues'][:3]:
             leagues_data = api_request(sport, 'leagues', {'search': league_name, 'season': 2024})
             if leagues_data:
-                # Защита от разных структур ответа API (football vs другие виды спорта)
                 if sport == 'football':
                     items = [{'name': l['league']['name'], 'id': l['league']['id']} for l in leagues_data[:5] if 'league' in l]
                 else:
@@ -471,7 +492,6 @@ def text_search(message):
                     found = True
                     break
 
-    # 3. Поиск по конкретному матчу
     if not found and grok_response.get('match_query'):
         fixtures = api_request(sport, 'fixtures', {'search': grok_response['match_query']})
         if fixtures:
@@ -483,6 +503,20 @@ def text_search(message):
                 text += f"• {home} vs {away} ({league})\n"
             bot.reply_to(message, text)
             found = True
+
+    if not found:
+        bot.reply_to(message, "Ничего подходящего не нашёл.\n\nПопробуй:\n• написать по-английски (Barcelona vs Real, NBA Lakers)\n• указать лигу или дату\n• уточнить вид спорта")
+
+# ====================== POLLING ======================
+if __name__ == '__main__':
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook удалён, запускаем polling")
+    except Exception as e:
+        logger.warning(f"Ошибка удаления webhook: {e}")
+   
+    logger.info("Polling запущен — бот должен отвечать мгновенно")
+    bot.polling(none_stop=True, interval=0, timeout=20)
 
     if not found:
         bot.reply_to(message, "Ничего подходящего не нашёл.\n\nПопробуй:\n• написать по-английски (Barcelona vs Real, NBA Lakers)\n• указать лигу или дату\n• уточнить вид спорта")
