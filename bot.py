@@ -262,7 +262,6 @@ def text_search(message):
     loading_msg = bot.reply_to(message, f"Ищу по '{query}'... ⏳")
     delayed_delete(chat_id, loading_msg.message_id, delay=15)
    
-    # Улучшенный промпт — без внутренних кавычек, которые ломали синтаксис
     groq_prompt = f"""
 Пользователь ищет спортивную информацию. Запрос: {query}. Вид спорта: {sport}.
 
@@ -305,7 +304,7 @@ def text_search(message):
                 "content": groq_prompt
             }
         ],
-        "temperature": 0.15,  # ещё ниже для максимальной стабильности
+        "temperature": 0.15,
         "max_tokens": 400,
         "stream": False
     }
@@ -321,7 +320,7 @@ def text_search(message):
            
             logger.info(f"Groq raw (попытка {attempt+1}): {response_text[:300]}...")
            
-            # Мощная чистка ответа — убираем всё, что не JSON
+            # Чистка ответа
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}') + 1
             if start_idx == -1 or end_idx == 0:
@@ -329,21 +328,29 @@ def text_search(message):
            
             clean_json = response_text[start_idx:end_idx]
             groq_response = json.loads(clean_json)
-            break  # успех — выходим из цикла
-       
-        except (json.JSONDecodeError, ValueError, requests.exceptions.HTTPError) as e:
-            logger.error(f"Ошибка Groq (попытка {attempt+1}): {e}")
+            break
+        except Exception as e:
+            logger.error(f"Groq ошибка (попытка {attempt+1}): {e}")
             if attempt == max_retries - 1:
-                bot.reply_to(message, "ИИ вернул некорректный ответ. Попробуй перефразировать запрос.")
+                bot.reply_to(message, "ИИ вернул некорректный ответ. Попробуй перефразировать.")
                 return
    
-    # Дальше твоя обработка ответа (teams, leagues, fixtures)
     found = False
    
+    # Обработка команд и лиг (твой старый код, можно оставить)
     if groq_response.get('teams'):
-        # ... (твой код для поиска команд)
+        for team_name in groq_response['teams'][:3]:
+            teams_data = api_request(sport, 'teams', {'search': team_name})
+            if teams_data:
+                items = [{'name': t.get('team', {}).get('name', 'Unknown'), 'id': t.get('team', {}).get('id', '')} for t in teams_data[:5] if t.get('team')]
+                if items:
+                    markup = create_inline_markup(items, "team_search", per_row=1)
+                    result = bot.reply_to(message, f"🏟️ Найденные команды по запросу «{team_name}»:", reply_markup=markup, parse_mode='Markdown')
+                    delayed_delete(chat_id, result.message_id, delay=120)
+                    found = True
+                    break
    
-    # Блок для матчей (last/next/today) — улучшенный и безопасный
+    # Улучшенный блок для матчей — с правильным отступом
     if not found and (groq_response.get('fixture_type') or groq_response.get('match_query') or groq_response.get('teams')):
         team_name = groq_response.get('teams', [None])[0]
         if not team_name and groq_response.get('match_query'):
@@ -359,7 +366,7 @@ def text_search(message):
            
             team_id = teams_data[0]['team'].get('id')
             if not team_id:
-                bot.reply_to(message, f"ID команды не найден в ответе API.")
+                bot.reply_to(message, f"ID команды не найден.")
                 return
            
             params = {'team': team_id}
@@ -374,7 +381,7 @@ def text_search(message):
             fixtures = api_request(sport, 'fixtures', params)
            
             if fixtures:
-                text = f"Матчи команды **{team_name}** ({fixture_type.capitalize()}):\n\n"
+                text = f"📅 *Матчи* команды **{team_name}** ({fixture_type.capitalize()}):\n\n"
                 for fx in fixtures[:5]:
                     date = fx['fixture']['date'][:10]
                     time = fx['fixture']['date'][11:16]
@@ -391,7 +398,7 @@ def text_search(message):
                 bot.reply_to(message, f"Матчи для «{team_name}» ({fixture_type}) не найдены.")
    
     if not found:
-        bot.reply_to(message, "Ничего не нашёл. Попробуй:\n• По-английски (Barcelona last match)\n• Уточни вид спорта\n• Используй 'последний', 'ближайший'")
+        bot.reply_to(message, "🔍 Ничего не нашёл...\n\nПопробуй:\n• По-английски (Barcelona last match)\n• Уточни спорт или команду\n• Используй 'последний', 'ближайший', 'сегодня'")
 # ====================== POLLING ======================
 if __name__ == '__main__':
     try:
