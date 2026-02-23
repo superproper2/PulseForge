@@ -344,89 +344,75 @@ def start(message):
     if not state.get('sport'):
         bot.send_message(chat_id, "Какой вид спорта вас интересует? Напишите название (футбол, биатлон и т.д.)")
 
-@bot.callback_query_handler(func=lambda call: call.data == "popular_fixtures")
-def popular_fixtures(call):
+@bot.callback_query_handler(func=lambda call: True)  # Ловим ВСЕ callback'и
+def callback_handler(call):
     chat_id = call.message.chat.id
-    text = "📈 Популярные матчи сегодня:\n\n"
-    
-    # Пример популярных лиг: EPL 39, NBA 12
-    popular_leagues = {'football': 39, 'basketball': 12}  # расширь
-    
-    for sport, league_id in popular_leagues.items():
-        fixtures = api_request(sport, 'fixtures', {'league': league_id, 'date': datetime.now().strftime('%Y-%m-%d')})
-        if fixtures:
-            text += f"* {sport.capitalize()} *\n"
-            for fx in fixtures[:5]:
-                home = fx['teams']['home']['name']
-                away = fx['teams']['away']['name']
-                text += f"{home} vs {away}\n"
-    
-    bot.edit_message_text(text, chat_id, call.message.message_id)
-    logger.info(f"Показаны популярные матчи для {chat_id}")
-
-# Аналогично добавь для других callback
-
-@bot.message_handler(content_types=['text'])
-def text_search(message):
-    query = message.text.strip()
-    if len(query) < 3:
-        bot.reply_to(message, "Напиши минимум 3 символа для поиска")
-        return
+    data = call.data
    
-    chat_id = message.chat.id
-    state = get_user_state(chat_id)
-    sport = state.get('sport') or 'football'
-   
-    logger.info(f"AI-поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
-   
-    bot.reply_to(message, f"Ищу по '{query}'... ⏳")
-   
-    groq_prompt = f"""
-Пользователь ищет спортивную информацию.
-Запрос: "{query}"
-Текущий выбранный вид спорта в боте: {sport}
-Верни ТОЛЬКО валидный JSON, без лишнего текста, без markdown, без ```json:
-{{
-  "teams": ["команда1", "команда2"] или [],
-  "leagues": ["лига1"] или [],
-  "match_query": "матч Барселона vs Реал" или null,
-  "date_filter": "today" или "tomorrow" или "yesterday" или "live" или null,
-  "fixture_type": "last" или "next" или "live" или "today" или null,
-  "sport": "football" или "basketball" или null
-}}
-Если не понятно — верни пустые массивы и null.
-"""
-    groq_url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Ты точный парсер спортивных запросов. Отвечай исключительно JSON-объектом, без единого слова вне структуры."
-            },
-            {
-                "role": "user",
-                "content": groq_prompt
-            }
-        ],
-        "temperature": 0.2,
-        "max_tokens": 300,
-        "stream": False
-    }
-   
+    # Удаляем старое сообщение (чтобы не было "message to edit not found")
     try:
-        r = requests.post(groq_url, json=payload, headers=headers, timeout=10)
-        r.raise_for_status()
-        response = r.json().get('response', {})
-        logger.info(f"Grok вернул {len(response)} элементов для {endpoint}")
-        return response
-    except Exception as e:
-        logger.error(f"Ошибка запроса API: {e}")
-        return []
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass  # Если уже удалено — ок
+   
+    if data == "search_match":
+        text = "🔍 *Введите запрос*\n\nПримеры:\n• Барселона сегодня\n• NBA Лейкерс vs Голден Стэйт\n• Премьер-лига таблица\n• Биатлон последний матч"
+        sent = bot.send_message(chat_id, text, parse_mode='Markdown')
+        delayed_delete(chat_id, sent.message_id, delay=90)
+   
+    elif data == "about_bot":
+        text = (
+            "🌟 *PulseForge* — ваш спортивный помощник 🌟\n\n"
+            "⚡ Живые результаты и статистика\n"
+            "📈 Аналитика формы и прогнозы\n"
+            "🎯 Графики команд и игроков\n"
+            "🚫 Без рекламы и ставок — чистый спорт\n\n"
+            "Создано для фанатов! 🔥"
+        )
+        sent = bot.send_message(chat_id, text, parse_mode='Markdown')
+        delayed_delete(chat_id, sent.message_id, delay=90)
+   
+    elif data.startswith("sport_"):
+        sport = data.split('_')[1]
+        state = get_user_state(chat_id)
+        state['sport'] = sport
+        save_user_state(chat_id, state)
+       
+        markup = InlineKeyboardMarkup(row_width=2)
+        regions = ['europe', 'america', 'asia', 'africa', 'international']
+        for r in regions:
+            markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
+        add_back_button(markup, "back_to_start")
+       
+        text = f"🌍 *Выберите регион* для **{sport.capitalize()}**"
+        sent = bot.send_message(chat_id, text, reply_markup=markup, parse_mode='Markdown')
+        last_menu_msgs[chat_id] = sent.message_id
+        delayed_delete(chat_id, sent.message_id, delay=180)
+   
+    elif data == "popular_fixtures":
+        text = "📈 *Популярные матчи сегодня*\n\n"
+        popular = [
+            ("football", "Premier League", 39),
+            ("basketball", "NBA", 12),
+            ("football", "La Liga", 140),
+            ("football", "Bundesliga", 78),
+        ]
+        for sport, league_name, league_id in popular:
+            fixtures = api_request(sport, 'fixtures', {'league': league_id, 'date': datetime.now().strftime('%Y-%m-%d')})
+            if fixtures:
+                text += f"**{league_name}**\n"
+                for fx in fixtures[:3]:
+                    home = fx['teams']['home']['name']
+                    away = fx['teams']['away']['name']
+                    time = fx['fixture']['date'][11:16]
+                    text += f"{time} | {home} vs {away}\n"
+                text += "\n"
+       
+        sent = bot.send_message(chat_id, text or "Сегодня нет популярных матчей", parse_mode='Markdown')
+        delayed_delete(chat_id, sent.message_id, delay=180)
+   
+    # Для остальных кнопок (region_, country_, league_, back_*) — добавь аналогично
+    bot.answer_callback_query(call.id)  # обязательно отвечаем на callback, чтобы убрать "часики"
 
 # ====================== POLLING ======================
 if __name__ == '__main__':
