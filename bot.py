@@ -381,7 +381,6 @@ def text_search(message):
     bot.reply_to(message, "Ничего не найдено. Попробуй название команды, лиги или матча.")
 
 # ====================== POLLING ======================
-# Текстовый поиск — ловим любой текст (с AI-заглушкой)
 @bot.message_handler(content_types=['text'])
 def text_search(message):
     query = message.text.strip()
@@ -391,18 +390,18 @@ def text_search(message):
     
     chat_id = message.chat.id
     state = get_user_state(chat_id)
-    sport = state.get('sport') or 'football'  # по умолчанию футбол
+    sport = state.get('sport') or 'football'
     
-    logger.info(f"Поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
+    logger.info(f"AI-поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
     
     bot.reply_to(message, f"Ищу по '{query}'... ⏳")
     
-    # Запрос к Grok для понимания запроса (пока заглушка)
+    # Промпт для Grok
     grok_prompt = f"""
     Пользователь ищет спортивную информацию.
     Запрос: "{query}"
 
-    Верни в формате JSON:
+    Верни ТОЛЬКО валидный JSON, без лишнего текста:
     {{
       "teams": ["команда1", "команда2"] или [],
       "leagues": ["лига1"] или [],
@@ -411,36 +410,40 @@ def text_search(message):
       "sport": "football", "basketball" или null
     }}
 
-    Если не понятно — верни пустые массивы.
+    Если ничего не понял — верни пустые массивы и null.
     """
 
-    # Заглушка Grok (пока без реального API — замени позже)
-    grok_response = {
-        "teams": ["Barcelona", "Real Madrid"] if "барс" in query.lower() or "barcelona" in query.lower() else [],
-        "leagues": ["Premier League"] if "премьер" in query.lower() or "premier" in query.lower() else [],
-        "match_query": "Barcelona vs Real Madrid" if "барселона" in query.lower() and "реал" in query.lower() else None,
-        "date_filter": "today",
-        "sport": sport
+    # Реальный вызов Grok API
+    grok_url = "https://api.x.ai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('GROK_API_KEY')}",
+        "Content-Type": "application/json"
     }
-
-    # Реальный вызов Grok (раскомментируй, когда будет ключ)
-    # grok_url = "https://api.x.ai/v1/chat/completions"
-    # headers = {"Authorization": f"Bearer {os.getenv('GROK_API_KEY')}", "Content-Type": "application/json"}
-    # payload = {
-    #     "model": "grok-beta",
-    #     "messages": [{"role": "user", "content": grok_prompt}],
-    #     "temperature": 0.3
-    # }
-    # r = requests.post(grok_url, json=payload, headers=headers)
-    # if r.status_code == 200:
-    #     grok_response = json.loads(r.json()['choices'][0]['message']['content'])
-    # else:
-    #     grok_response = {"teams": [], "leagues": [], "match_query": None, "date_filter": None, "sport": None}
-    #     logger.error(f"Grok ошибка: {r.text}")
+    payload = {
+        "model": "grok-beta",
+        "messages": [{"role": "user", "content": grok_prompt}],
+        "temperature": 0.3,
+        "max_tokens": 200
+    }
+    
+    try:
+        r = requests.post(grok_url, json=payload, headers=headers)
+        r.raise_for_status()
+        response_text = r.json()['choices'][0]['message']['content'].strip()
+        logger.info(f"Grok ответил: {response_text}")
+        
+        # Парсим JSON (Grok может вернуть с лишним текстом, чистим)
+        if response_text.startswith("```json"):
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        grok_response = json.loads(response_text)
+    except Exception as e:
+        logger.error(f"Ошибка Grok API: {e}")
+        grok_response = {"teams": [], "leagues": [], "match_query": None, "date_filter": None, "sport": None}
+        bot.reply_to(message, "Ошибка поиска. Попробуй позже или напиши по-английски (Barcelona, Premier League).")
 
     found = False
 
-    # Поиск по командам
+    # 1. Поиск по командам
     if grok_response.get('teams'):
         for team_name in grok_response['teams']:
             teams = api_request(sport, 'teams', {'search': team_name})
@@ -451,7 +454,7 @@ def text_search(message):
                 found = True
                 break
 
-    # Поиск по лигам
+    # 2. Поиск по лигам
     if not found and grok_response.get('leagues'):
         for league_name in grok_response['leagues']:
             leagues = api_request(sport, 'leagues', {'search': league_name, 'season': 2024})
@@ -462,7 +465,7 @@ def text_search(message):
                 found = True
                 break
 
-    # Поиск матчей (если есть match_query)
+    # 3. Поиск матча (если есть match_query)
     if not found and grok_response.get('match_query'):
         fixtures = api_request(sport, 'fixtures', {'search': grok_response['match_query']})
         if fixtures:
@@ -474,6 +477,4 @@ def text_search(message):
 
     if not found:
         bot.reply_to(message, "Ничего не нашёл. Попробуй английское название (Barcelona, Premier League) или уточни запрос.")
-        
-
 
