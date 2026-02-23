@@ -1,4 +1,4 @@
-# bot.py — PulseForge (polling + экранированный MarkdownV2)
+# bot.py — PulseForge (polling + без '!' + экранирование)
 
 import os
 import json
@@ -230,9 +230,9 @@ def start(message):
     state = get_user_state(chat_id)
     
     welcome = (
-        "🔥 *PulseForge активирован\\!* 🔥\n\n"
-        "Мы куём настоящий *пульс спорта* — результаты, аналитика, прогнозы и графики формы\\.\n"
-        "⚡ Здесь нет ставок — только чистый огонь инсайтов и ритм матчей\\! 🏆\n\n"
+        "🔥 *PulseForge активирован* 🔥\n\n"
+        "Мы куём настоящий *пульс спорта* — результаты, аналитика, прогнозы и графики формы.\n"
+        "⚡ Здесь нет ставок — только чистый огонь инсайтов и ритм матчей 🏆\n\n"
         "Выбери спорт и почувствуй удар пульса:\n\n"
         "Готов кузнечить победу? 💪"
     )
@@ -249,12 +249,12 @@ def start(message):
     
     markup.add(InlineKeyboardButton("🔥 О PulseForge", callback_data="about_bot"))
     
-bot.send_message(
-    chat_id,
-    welcome,
-   # parse_mode='MarkdownV2',  # ← закомментируй или удали эту строку
-    reply_markup=markup
-)
+    bot.send_message(
+        chat_id,
+        welcome,
+        parse_mode='MarkdownV2',
+        reply_markup=markup
+    )
     logger.info(f"Команда /start от chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "about_bot")
@@ -264,11 +264,11 @@ def about_bot(call):
         "• Живые результаты и live-пульс\n"
         "• Прогнозы + H2H\n"
         "• Графики формы команд 📈\n"
-        "• Без рекламы и ставок — чистый спорт\\!\n\n"
+        "• Без рекламы и ставок — чистый спорт\n\n"
         "Куём дальше вместе? 💥"
     )
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, text)  # без parse_mode
+    bot.send_message(call.message.chat.id, text, parse_mode='MarkdownV2')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sport_'))
 def choose_sport(call):
@@ -287,7 +287,7 @@ def choose_sport(call):
     bot.edit_message_text(
         f"🔥 *Выбери регион* для {sport.capitalize()}:\n\n",
         chat_id, call.message.message_id,
-        #parse_mode='MarkdownV2', reply_markup=markup
+        parse_mode='MarkdownV2', reply_markup=markup
     )
     logger.info(f"Выбран спорт: {sport} для chat_id={chat_id}")
 
