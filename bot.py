@@ -357,21 +357,19 @@ def text_search(message):
     bot.reply_to(message, f"Ищу по '{query}'... ⏳")
     
     # Промпт для Grok (правильный)
-    grok_prompt = f"""
-    Пользователь ищет спортивную информацию.
-    Запрос: "{query}"
-
-    Верни ТОЛЬКО валидный JSON, без лишнего текста и без ```json:
-    {{
-      "teams": ["команда1", "команда2"] или [],
-      "leagues": ["лига1"] или [],
-      "match_query": "матч Барселона vs Реал" или null,
-      "date_filter": "today" или "tomorrow" или "yesterday" или "live" или null,
-      "sport": "football" или "basketball" или null
-    }}
-
-    Если не понятно — верни пустые массивы и null.
-    """
+grok_prompt = (
+    'Пользователь ищет спортивную информацию.\n'
+    f'Запрос: "{query}"\n\n'
+    'Верни ТОЛЬКО валидный JSON, без лишнего текста:\n'
+    '{\n'
+    '  "teams": ["команда1", "команда2"] или [],\n'
+    '  "leagues": ["лига1"] или [],\n'
+    '  "match_query": "матч Барселона vs Реал" или null,\n'
+    '  "date_filter": "today" или "tomorrow" или "yesterday" или "live" или null,\n'
+    '  "sport": "football" или "basketball" или null\n'
+    '}\n'
+    'Если не понятно — верни пустые массивы и null.'
+)
 
     # Реальный вызов Grok
     grok_url = "https://api.x.ai/v1/chat/completions"
@@ -438,3 +436,20 @@ def text_search(message):
 
     if not found:
         bot.reply_to(message, "Ничего не нашёл. Попробуй английское название (Barcelona, Premier League) или уточни запрос.")
+
+# ... весь твой код ...
+
+@bot.message_handler(content_types=['text'])
+def text_search(message):
+    ... (твой код поиска)
+
+# Вот здесь — САМЫЙ КОНЕЦ ФАЙЛА
+if __name__ == '__main__':
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook удалён, запускаем polling")
+    except Exception as e:
+        logger.warning(f"Ошибка удаления webhook: {e}")
+    
+    logger.info("Polling запущен — бот должен отвечать мгновенно")
+    bot.polling(none_stop=True, interval=0, timeout=20)
