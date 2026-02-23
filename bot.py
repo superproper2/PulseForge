@@ -252,7 +252,7 @@ def start(message):
 bot.send_message(
     chat_id,
     welcome,
-    parse_mode='MarkdownV2',  # ← закомментируй или удали эту строку
+   # parse_mode='MarkdownV2',  # ← закомментируй или удали эту строку
     reply_markup=markup
 )
     logger.info(f"Команда /start от chat_id={chat_id}")
