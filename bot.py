@@ -287,7 +287,7 @@ def choose_sport(call):
     bot.edit_message_text(
         f"🔥 *Выбери регион* для {sport.capitalize()}:\n\n",
         chat_id, call.message.message_id,
-        parse_mode='MarkdownV2', reply_markup=markup
+        #parse_mode='MarkdownV2', reply_markup=markup
     )
     logger.info(f"Выбран спорт: {sport} для chat_id={chat_id}")
 
