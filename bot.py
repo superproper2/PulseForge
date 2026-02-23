@@ -1,4 +1,4 @@
-# bot.py — PulseForge (polling + без '!' + экранирование)
+# bot.py — PulseForge (максимально простой, без MarkdownV2, без '!')
 
 import os
 import json
@@ -111,12 +111,6 @@ def add_back_button(markup, back_callback):
     markup.add(InlineKeyboardButton("⬅️ Назад", callback_data=back_callback))
     return markup
 
-def escape_md(text):
-    chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for c in chars:
-        text = text.replace(c, f'\\{c}')
-    return text
-
 def api_request(sport, endpoint, params=None):
     base_urls = {
         'football': 'https://v3.football.api-sports.io/',
@@ -151,7 +145,7 @@ def generate_form_graph(form):
     fig, ax = plt.subplots(figsize=(6, 3))
     colors = ['#4CAF50' if v == 1 else '#F44336' if v == 0 else '#FFEB3B' for v in values]
     ax.bar(labels, values, color=colors)
-    ax.set_title('Пульс формы команды 🔥')
+    ax.set_title('Форма команды')
     ax.set_ylim(0, 1.1)
     ax.set_yticks([0, 0.5, 1])
     ax.set_yticklabels(['Пор', 'Нич', 'Поб'])
@@ -175,12 +169,12 @@ def simple_prognosis(fixture, sport):
     stats_params = {'team': home_id, 'league': fixture['league']['id'], 'season': 2025}
     stats = api_request(sport, 'teams/statistics', stats_params)
     
-    prog = f"• {home} — фаворит 🔥"
+    prog = f"{home} — фаворит"
     if stats and 'form' in stats:
         form = stats['form']
         wins = form.count('W')
         rate = (wins / len(form)) * 100 if form else 50
-        prog = f"• {home} имеет ≈{rate:.0f}% шансов на победу (по пульсу формы)"
+        prog = f"{home} имеет примерно {rate:.0f}% шансов на победу (по форме)"
     
     h2h_text = "История встреч недоступна"
     try:
@@ -199,11 +193,11 @@ def simple_prognosis(fixture, sport):
 
 def format_match(fixture, sport):
     if not fixture:
-        return "Матч не найден 😕"
+        return "Матч не найден"
 
-    home = escape_md(fixture['teams']['home']['name'])
-    away = escape_md(fixture['teams']['away']['name'])
-    league_name = escape_md(fixture['league']['name'])
+    home = fixture['teams']['home']['name']
+    away = fixture['teams']['away']['name']
+    league_name = fixture['league']['name']
     
     score = "?"
     if fixture['goals']['home'] is not None and fixture['goals']['away'] is not None:
@@ -213,13 +207,13 @@ def format_match(fixture, sport):
     date_str = fixture['fixture']['date'][:10]
     time_str = fixture['fixture']['date'][11:16]
     
-    emoji = {'football': '⚽️', 'basketball': '🏀', 'ice-hockey': '🏒', 'tennis': '🎾'}.get(sport, '🏆')
+    emoji = {'football': '⚽', 'basketball': '🏀', 'ice-hockey': '🏒', 'tennis': '🎾'}.get(sport, '🏆')
     
-    text = f"🔥 *{home} vs {away}* 🔥\n\n"
-    text += f"🏟️ Лига: {league_name} | Пульс: {status}\n"
-    text += f"📅 {date_str} • {time_str}\n"
-    text += f"⚡ Счёт: *{score}*\n\n"
-    text += f"🔥 *Пульс прогноза:*\n{simple_prognosis(fixture, sport)}"
+    text = f"{emoji} {home} vs {away}\n\n"
+    text += f"Лига: {league_name} | Статус: {status}\n"
+    text += f"Дата: {date_str} в {time_str}\n"
+    text += f"Счёт: {score}\n\n"
+    text += f"Прогноз:\n{simple_prognosis(fixture, sport)}"
     
     return text
 
@@ -230,29 +224,27 @@ def start(message):
     state = get_user_state(chat_id)
     
     welcome = (
-        "🔥 *PulseForge активирован* 🔥\n\n"
-        "Мы куём настоящий *пульс спорта* — результаты, аналитика, прогнозы и графики формы.\n"
-        "⚡ Здесь нет ставок — только чистый огонь инсайтов и ритм матчей 🏆\n\n"
-        "Выбери спорт и почувствуй удар пульса:\n\n"
-        "Готов кузнечить победу? 💪"
+        "PulseForge активирован\n\n"
+        "Результаты матчей, аналитика, прогнозы и графики формы команд.\n"
+        "Здесь нет ставок — только чистая информация о спорте\n\n"
+        "Выбери спорт:"
     )
     
     markup = InlineKeyboardMarkup(row_width=2)
     sports = [
-        ("⚽ Футбол", "sport_football"),
-        ("🏀 Баскетбол", "sport_basketball"),
-        ("🏒 Хоккей", "sport_ice-hockey"),
-        ("🎾 Теннис", "sport_tennis"),
+        ("Футбол", "sport_football"),
+        ("Баскетбол", "sport_basketball"),
+        ("Хоккей", "sport_ice-hockey"),
+        ("Теннис", "sport_tennis"),
     ]
     for txt, cb in sports:
         markup.add(InlineKeyboardButton(txt, callback_data=cb))
     
-    markup.add(InlineKeyboardButton("🔥 О PulseForge", callback_data="about_bot"))
+    markup.add(InlineKeyboardButton("О PulseForge", callback_data="about_bot"))
     
     bot.send_message(
         chat_id,
         welcome,
-        parse_mode='MarkdownV2',
         reply_markup=markup
     )
     logger.info(f"Команда /start от chat_id={chat_id}")
@@ -260,15 +252,15 @@ def start(message):
 @bot.callback_query_handler(func=lambda call: call.data == "about_bot")
 def about_bot(call):
     text = (
-        "PulseForge — твоя кузница спортивных инсайтов 🔥\n\n"
-        "• Живые результаты и live-пульс\n"
-        "• Прогнозы + H2H\n"
-        "• Графики формы команд 📈\n"
-        "• Без рекламы и ставок — чистый спорт\n\n"
-        "Куём дальше вместе? 💥"
+        "PulseForge — бот для спортивных результатов и аналитики\n\n"
+        "Живые результаты\n"
+        "Прогнозы на основе формы\n"
+        "Графики команд\n"
+        "Без рекламы и ставок\n\n"
+        "Куём дальше?"
     )
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, text, parse_mode='MarkdownV2')
+    bot.send_message(call.message.chat.id, text)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sport_'))
 def choose_sport(call):
@@ -281,13 +273,13 @@ def choose_sport(call):
     
     markup = InlineKeyboardMarkup(row_width=2)
     for r in ['europe', 'america', 'asia', 'africa', 'international']:
-        markup.add(InlineKeyboardButton(f"🌐 {r.capitalize()}", callback_data=f"region_{r}"))
+        markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
     add_back_button(markup, "back_to_start")
     
     bot.edit_message_text(
-        f"🔥 *Выбери регион* для {sport.capitalize()}:\n\n",
+        f"Выбери регион для {sport.capitalize()}:",
         chat_id, call.message.message_id,
-        parse_mode='MarkdownV2', reply_markup=markup
+        reply_markup=markup
     )
     logger.info(f"Выбран спорт: {sport} для chat_id={chat_id}")
 
