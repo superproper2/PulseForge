@@ -153,7 +153,12 @@ def start(message):
     bot.send_message(chat_id, welcome, reply_markup=markup)
     logger.info(f"/start от chat_id={chat_id}")
 
-@bot.callback_query_handler(func=lambda call: True)  # Ловим ВСЕ callback для отладки
+# bot.py — PulseForge (обновление: добавлен хендлер для страны)
+
+# ... (весь предыдущий код до callback_debug остаётся без изменений)
+
+# Отладочный хендлер (ловим все callback)
+@bot.callback_query_handler(func=lambda call: True)
 def callback_debug(call):
     logger.info(f"Получен callback: data='{call.data}' от chat_id={call.message.chat.id}")
     
@@ -163,6 +168,8 @@ def callback_debug(call):
         choose_sport(call)
     elif call.data.startswith('region_'):
         choose_region(call)
+    elif call.data.startswith('country_'):
+        choose_country(call)  # ← НОВЫЙ ХЕНДЛЕР
     elif call.data == "back_to_start":
         back_to_start(call)
     elif call.data == "back_to_sport":
@@ -170,6 +177,81 @@ def callback_debug(call):
     else:
         logger.warning(f"Неизвестный callback: {call.data}")
         bot.answer_callback_query(call.id, "Неизвестная кнопка")
+
+# НОВЫЙ ХЕНДЛЕР — выбор страны → показ лиг
+@bot.callback_query_handler(func=lambda call: call.data.startswith('country_'))
+def choose_country(call):
+    chat_id = call.message.chat.id
+    country = call.data.split('_')[1]
+    
+    state = get_user_state(chat_id)
+    state['country'] = country
+    save_user_state(chat_id, state)
+    
+    sport = state.get('sport')
+    if not sport:
+        bot.answer_callback_query(call.id, "Сначала выбери спорт")
+        return
+    
+    logger.info(f"Выбрана страна: {country} для спорта {sport} от chat_id={chat_id}")
+    
+    # Запрашиваем лиги для страны и сезона
+    leagues = api_request(sport, 'leagues', {'country': country, 'season': 2025})
+    
+    if not leagues:
+        bot.edit_message_text(
+            "Лиги не найдены для этой страны.",
+            chat_id,
+            call.message.message_id
+        )
+        return
+    
+    # Берём первые 10 лиг (можно расширить)
+    items = [{'name': l['league']['name'], 'id': l['league']['id']} for l in leagues[:10]]
+    markup = create_inline_markup(items, f"league", per_row=1)
+    add_back_button(markup, "back_to_region")  # назад к регионам
+    
+    try:
+        bot.edit_message_text(
+            f"Выбери лигу в {country.capitalize()}:",
+            chat_id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+        logger.info(f"Показаны лиги для страны {country}")
+    except Exception as e:
+        logger.error(f"Ошибка edit в choose_country: {e}")
+        bot.send_message(chat_id, f"Лиги в {country.capitalize()}:", reply_markup=markup)  # fallback
+
+# Добавь этот хендлер для back_to_region (назад к регионам)
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_region")
+def back_to_region(call):
+    chat_id = call.message.chat.id
+    state = get_user_state(chat_id)
+    sport = state.get('sport')
+    
+    if not sport:
+        bot.answer_callback_query(call.id, "Сначала выбери спорт")
+        return
+    
+    markup = InlineKeyboardMarkup(row_width=2)
+    regions = ['europe', 'america', 'asia', 'africa', 'international']
+    for r in regions:
+        markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
+    add_back_button(markup, "back_to_sport")
+    
+    try:
+        bot.edit_message_text(
+            f"Выбери регион для {sport.capitalize()}:",
+            chat_id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    except Exception as e:
+        logger.error(f"Ошибка back_to_region: {e}")
+        bot.send_message(chat_id, "Выбери регион:", reply_markup=markup)
+
+# ... (остальной код остаётся без изменений: choose_sport, back_to_start, back_to_sport, polling в конце)
 
 def choose_sport(call):
     chat_id = call.message.chat.id
