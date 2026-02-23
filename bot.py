@@ -381,7 +381,7 @@ def text_search(message):
    
     bot.reply_to(message, f"Ищу по '{query}'... ⏳")
    
-    deepseek_prompt = f"""
+    groq_prompt = f"""
 Пользователь ищет спортивную информацию.
 Запрос: "{query}"
 Текущий выбранный вид спорта в боте: {sport}
@@ -397,22 +397,22 @@ def text_search(message):
 Если запрос непонятен или не относится к спорту — верни пустые массивы и null.
 """
    
-    deepseek_url = "https://api.deepseek.com/chat/completions"
+    groq_url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY')}",
+        "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
         "Content-Type": "application/json"
     }
    
     payload = {
-        "model": "deepseek-chat",  # или "deepseek-reasoner" для более сложных запросов
+        "model": "llama-3.1-70b-versatile",  # сильная и быстрая бесплатная модель
         "messages": [
             {
                 "role": "system",
-                "content": "Ты точный парсер спортивных запросов. Отвечай исключительно JSON-объектом, без единого слова вне структуры. Никогда не добавляй пояснения."
+                "content": "Ты точный парсер спортивных запросов. Отвечай исключительно JSON-объектом, без единого слова вне структуры. Никогда не добавляй пояснения, комментарии или markdown."
             },
             {
                 "role": "user",
-                "content": deepseek_prompt
+                "content": groq_prompt
             }
         ],
         "temperature": 0.2,
@@ -420,56 +420,56 @@ def text_search(message):
         "stream": False
     }
    
-    deepseek_response = {"teams": [], "leagues": [], "match_query": None, "date_filter": None, "sport": None}
+    groq_response = {"teams": [], "leagues": [], "match_query": None, "date_filter": None, "sport": None}
    
     try:
-        r = requests.post(deepseek_url, json=payload, headers=headers, timeout=12)
+        r = requests.post(groq_url, json=payload, headers=headers, timeout=12)
         r.raise_for_status()
        
         response_data = r.json()
         response_text = response_data['choices'][0]['message']['content'].strip()
        
-        logger.info(f"DeepSeek raw response: {response_text[:400]}...")
+        logger.info(f"Groq raw response: {response_text[:400]}...")
        
-        # Удаляем возможные обёртки (DeepSeek иногда добавляет ```)
+        # Удаляем возможные обёртки (Groq иногда добавляет ```)
         if response_text.startswith("```json"):
             response_text = response_text.split("```json", 1)[1].split("```", 1)[0].strip()
         elif response_text.startswith("```"):
             response_text = response_text.split("```", 2)[1].strip()
        
-        deepseek_response = json.loads(response_text)
+        groq_response = json.loads(response_text)
    
     except requests.exceptions.HTTPError as http_err:
         status = http_err.response.status_code
         error_body = http_err.response.text[:500]
-        logger.error(f"DeepSeek HTTP {status}: {error_body}")
+        logger.error(f"Groq HTTP {status}: {error_body}")
        
         if status == 401:
-            bot.reply_to(message, "Неверный ключ DeepSeek API (401). Проверь DEEPSEEK_API_KEY в настройках Railway.")
-        elif status in (402, 429):
-            bot.reply_to(message, "Лимит запросов или токенов на DeepSeek исчерпан. Попробуй позже или зарегистрируй новый аккаунт.")
+            bot.reply_to(message, "Неверный ключ Groq API (401). Проверь GROQ_API_KEY в настройках Railway.")
+        elif status == 429:
+            bot.reply_to(message, "Превышен лимит запросов Groq (429). Подожди 1–2 минуты и попробуй снова.")
         elif status == 400:
-            bot.reply_to(message, "Ошибка формата запроса к DeepSeek (400). Возможно проблема в промпте.")
+            bot.reply_to(message, "Ошибка формата запроса к Groq (400). Возможно проблема в промпте.")
         else:
-            bot.reply_to(message, f"Ошибка связи с DeepSeek API ({status}). Попробуй позже.")
+            bot.reply_to(message, f"Ошибка связи с Groq API ({status}). Попробуй позже.")
         return
    
     except json.JSONDecodeError:
-        logger.error(f"DeepSeek вернул невалидный JSON: {response_text}")
-        bot.reply_to(message, "ИИ вернул некорректный ответ. Попробуй перефразировать запрос (например, на английском).")
+        logger.error(f"Groq вернул невалидный JSON: {response_text}")
+        bot.reply_to(message, "ИИ вернул некорректный ответ. Попробуй перефразировать запрос (лучше на английском).")
         return
    
     except Exception as e:
-        logger.exception("Неожиданная ошибка при обращении к DeepSeek:")
+        logger.exception("Неожиданная ошибка при обращении к Groq:")
         bot.reply_to(message, "Что-то пошло не так при поиске через ИИ 😔")
         return
    
     # ────────────────────────────────────────────────
-    # Дальше обработка ответа (как было, без изменений)
+    # Обработка ответа Groq (как было раньше)
     found = False
    
-    if deepseek_response.get('teams'):
-        for team_name in deepseek_response['teams'][:3]:
+    if groq_response.get('teams'):
+        for team_name in groq_response['teams'][:3]:
             teams_data = api_request(sport, 'teams', {'search': team_name})
             if teams_data:
                 items = [{'name': t['team']['name'], 'id': t['team']['id']} for t in teams_data[:5]]
@@ -479,8 +479,8 @@ def text_search(message):
                     found = True
                     break
    
-    if not found and deepseek_response.get('leagues'):
-        for league_name in deepseek_response['leagues'][:3]:
+    if not found and groq_response.get('leagues'):
+        for league_name in groq_response['leagues'][:3]:
             leagues_data = api_request(sport, 'leagues', {'search': league_name, 'season': 2024})
             if leagues_data:
                 if sport == 'football':
@@ -494,8 +494,8 @@ def text_search(message):
                     found = True
                     break
    
-    if not found and deepseek_response.get('match_query'):
-        fixtures = api_request(sport, 'fixtures', {'search': deepseek_response['match_query']})
+    if not found and groq_response.get('match_query'):
+        fixtures = api_request(sport, 'fixtures', {'search': groq_response['match_query']})
         if fixtures:
             text = "Найденные матчи:\n\n"
             for fx in fixtures[:5]:
@@ -508,7 +508,6 @@ def text_search(message):
    
     if not found:
         bot.reply_to(message, "Ничего подходящего не нашёл.\n\nПопробуй:\n• написать по-английски (Barcelona vs Real, NBA Lakers)\n• указать лигу или дату\n• уточнить вид спорта")
-
 # ====================== POLLING ======================
 if __name__ == '__main__':
     # Шаг 1: Проверяем и удаляем существующий webhook (если есть)
