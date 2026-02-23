@@ -366,7 +366,7 @@ def back_to_region(call):
         reply_markup=markup
     )
     
-@bot.message_handler(content_types=['text'])
+ @bot.message_handler(content_types=['text'])
 def text_search(message):
     query = message.text.strip()
     if len(query) < 3:
@@ -404,7 +404,7 @@ def text_search(message):
     }
    
     payload = {
-        "model": "llama-3.1-70b-versatile",  # сильная и быстрая бесплатная модель
+        "model": "llama-3.3-70b-versatile",  # ← новая актуальная модель (замена 3.1)
         "messages": [
             {
                 "role": "system",
@@ -431,7 +431,7 @@ def text_search(message):
        
         logger.info(f"Groq raw response: {response_text[:400]}...")
        
-        # Удаляем возможные обёртки (Groq иногда добавляет ```)
+        # Удаляем возможные обёртки
         if response_text.startswith("```json"):
             response_text = response_text.split("```json", 1)[1].split("```", 1)[0].strip()
         elif response_text.startswith("```"):
@@ -445,13 +445,15 @@ def text_search(message):
         logger.error(f"Groq HTTP {status}: {error_body}")
        
         if status == 401:
-            bot.reply_to(message, "Неверный ключ Groq API (401). Проверь GROQ_API_KEY в настройках Railway.")
+            bot.reply_to(message, "Неверный ключ Groq API (401). Проверь GROQ_API_KEY в настройках.")
         elif status == 429:
-            bot.reply_to(message, "Превышен лимит запросов Groq (429). Подожди 1–2 минуты и попробуй снова.")
+            bot.reply_to(message, "Превышен лимит Groq (429). Подожди 1–2 минуты.")
+        elif status == 400 and "decommissioned" in error_body:
+            bot.reply_to(message, "Модель устарела на Groq. Обнови код на llama-3.3-70b-versatile.")
         elif status == 400:
-            bot.reply_to(message, "Ошибка формата запроса к Groq (400). Возможно проблема в промпте.")
+            bot.reply_to(message, "Ошибка формата запроса к Groq (400).")
         else:
-            bot.reply_to(message, f"Ошибка связи с Groq API ({status}). Попробуй позже.")
+            bot.reply_to(message, f"Ошибка Groq API ({status}). Попробуй позже.")
         return
    
     except json.JSONDecodeError:
@@ -464,8 +466,7 @@ def text_search(message):
         bot.reply_to(message, "Что-то пошло не так при поиске через ИИ 😔")
         return
    
-    # ────────────────────────────────────────────────
-    # Обработка ответа Groq (как было раньше)
+    # Обработка ответа (как раньше)
     found = False
    
     if groq_response.get('teams'):
