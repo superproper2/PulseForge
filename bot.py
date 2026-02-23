@@ -509,24 +509,55 @@ def text_search(message):
 
 # ====================== POLLING ======================
 if __name__ == '__main__':
-try:
-    current_webhook = bot.get_webhook_info()
-    if current_webhook.url:
-        logger.info(f"Webhook был активен: {current_webhook.url} — удаляем")
-        bot.delete_webhook(drop_pending_updates=True)
-    else:
-        logger.info("Webhook не активен — ок")
-except Exception as e:
-    logger.warning(f"Ошибка проверки webhook: {e}")
+    # Шаг 1: Проверяем и удаляем существующий webhook (если есть)
+    try:
+        webhook_info = bot.get_webhook_info()
+        if webhook_info.url:
+            logger.info(f"Обнаружен активный webhook: {webhook_info.url}")
+            logger.info("Удаляем webhook перед запуском polling...")
+            bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook успешно удалён")
+        else:
+            logger.info("Webhook не установлен — можно запускать polling")
+    except telebot.apihelper.ApiTelegramException as api_err:
+        logger.warning(f"Telegram API ошибка при проверке/удалении webhook: {api_err}")
+        if "webhook" in str(api_err).lower() and "not" in str(api_err).lower():
+            logger.info("Webhook и так не установлен — продолжаем")
+        else:
+            # Если ошибка критичная — можно остановить или повторить
+            logger.error("Критичная ошибка с webhook — бот может не работать")
+    except Exception as e:
+        logger.exception("Неожиданная ошибка при проверке webhook:")
     
-try:
-    bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Webhook удалён, запускаем polling")
-except Exception as e:
-    logger.warning(f"Ошибка удаления webhook: {e}")
-   
-logger.info("Polling запущен — бот должен отвечать мгновенно")
-bot.polling(none_stop=True, interval=0, timeout=20)
-
+    # Шаг 2: Дополнительная очистка на всякий случай (безопасно)
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        logger.info("Webhook окончательно удалён (на всякий случай)")
+    except telebot.apihelper.ApiTelegramException as api_err:
+        if "webhook" in str(api_err).lower() and "not" in str(api_err).lower():
+            pass  # нормально, webhook уже не существует
+        else:
+            logger.warning(f"Повторное удаление webhook не удалось: {api_err}")
+    except Exception as e:
+        logger.warning(f"Ошибка при повторном удалении webhook: {e}")
+    
+    # Шаг 3: Запускаем polling с улучшенными параметрами для стабильности на Railway
+    logger.info("Запускаем polling...")
+    logger.info("Polling запущен — бот должен отвечать мгновенно")
+    
+    try:
+        bot.polling(
+            none_stop=True,
+            interval=1,                # интервал между запросами (больше = меньше нагрузки)
+            timeout=35,                # таймаут long polling (Telegram рекомендует 30–60)
+            long_polling_timeout=35,
+            allowed_updates=["message", "callback_query", "edited_message"]  # только нужные типы
+        )
+    except telebot.apihelper.ApiTelegramException as api_err:
+        logger.error(f"Polling упал из-за Telegram API: {api_err}")
+        # Можно добавить retry логику, но для простоты просто логируем
+    except Exception as e:
+        logger.exception("Критическая ошибка в polling:")
+        # Здесь можно добавить перезапуск или уведомление админу
     if not found:
         bot.reply_to(message, "Ничего подходящего не нашёл.\n\nПопробуй:\n• написать по-английски (Barcelona vs Real, NBA Lakers)\n• указать лигу или дату\n• уточнить вид спорта")
