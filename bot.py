@@ -249,12 +249,12 @@ def start(message):
     
     markup.add(InlineKeyboardButton("🔥 О PulseForge", callback_data="about_bot"))
     
-    bot.send_message(
-        chat_id,
-        welcome,
-        parse_mode='MarkdownV2',
-        reply_markup=markup
-    )
+bot.send_message(
+    chat_id,
+    welcome,
+    parse_mode='MarkdownV2',  # ← закомментируй или удали эту строку
+    reply_markup=markup
+)
     logger.info(f"Команда /start от chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "about_bot")
@@ -268,7 +268,7 @@ def about_bot(call):
         "Куём дальше вместе? 💥"
     )
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, text, parse_mode='MarkdownV2')
+    bot.send_message(call.message.chat.id, text)  # без parse_mode
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sport_'))
 def choose_sport(call):
