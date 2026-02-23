@@ -1,4 +1,4 @@
-# bot.py — PulseForge (обновление: фикс отступов + все кнопки + поиск матчей + автоудаление)
+# bot.py — PulseForge (обновление: гибкий выбор спорта + чистое главное меню + надёжный поиск матчей)
 import os
 import json
 import requests
@@ -27,9 +27,12 @@ bot = telebot.TeleBot(TOKEN)
 DB_PATH = '/data/pulseforge.db'
 DB_DIR = os.path.dirname(DB_PATH)
 
-last_menu_msgs = {}  # {chat_id: message_id последнего меню}
+last_menu_msgs = {}  # {chat_id: message_id главного меню — НЕ удаляем}
 
 def delayed_delete(chat_id, message_id, delay=45):
+    # Главное меню не удаляем
+    if message_id == last_menu_msgs.get(chat_id):
+        return
     def delete_func():
         try:
             bot.delete_message(chat_id, message_id)
@@ -121,6 +124,10 @@ def add_back_button(markup, back_callback):
     markup.add(InlineKeyboardButton("⬅️ Назад", callback_data=back_callback))
     return markup
 
+def add_main_menu_button(markup):
+    markup.add(InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu"))
+    return markup
+
 def api_request(sport, endpoint, params=None):
     base_urls = {
         'football': 'https://v3.football.api-sports.io/',
@@ -128,7 +135,7 @@ def api_request(sport, endpoint, params=None):
         'ice-hockey': 'https://v1.hockey.api-sports.io/',
         'tennis': 'https://v1.tennis.api-sports.io/',
     }
-    base = base_urls.get(sport)
+    base = base_urls.get(sport.lower(), None)
     if not base:
         logger.warning(f"Нет API для {sport}")
         return []
@@ -152,27 +159,20 @@ def start(message):
     state = get_user_state(chat_id)
     
     welcome = (
-        "✨ *PulseForge* активирован! ✨\n\n"
-        "🔥 Живые результаты и статистика\n"
-        "📊 Аналитика формы команд\n"
-        "📈 Графики и прогнозы\n\n"
-        "⚠️ Без ставок — только спорт\n\n"
-        "Выбери вид спорта или ищи матч:"
+        "✨ *PulseForge* приветствует! ✨\n\n"
+        "Здесь всё о спорте: результаты, статистика, форма команд\n\n"
+        "Что хочешь посмотреть?"
     )
     
     markup = InlineKeyboardMarkup(row_width=2)
-    sports = [
-        ("⚽ Футбол", "sport_football"),
-        ("🏀 Баскетбол", "sport_basketball"),
-        ("🏒 Хоккей", "sport_ice-hockey"),
-        ("🎾 Теннис", "sport_tennis"),
-    ]
-    for txt, cb in sports:
-        markup.add(InlineKeyboardButton(txt, callback_data=cb))
-    
-    markup.add(InlineKeyboardButton("🔍 Поиск матча", callback_data="search_match"))
-    markup.add(InlineKeyboardButton("📈 Популярные матчи", callback_data="popular_fixtures"))
-    markup.add(InlineKeyboardButton("ℹ️ О боте", callback_data="about_bot"))
+    markup.add(
+        InlineKeyboardButton("🔍 Поиск матча", callback_data="search_match"),
+        InlineKeyboardButton("📈 Популярные матчи", callback_data="popular_fixtures")
+    )
+    markup.add(
+        InlineKeyboardButton("🏟️ Выбрать вид спорта", callback_data="choose_sport"),
+        InlineKeyboardButton("ℹ️ О боте", callback_data="about_bot")
+    )
     
     if chat_id in last_menu_msgs:
         try:
@@ -182,7 +182,7 @@ def start(message):
     
     sent = bot.send_message(chat_id, welcome, reply_markup=markup, parse_mode='Markdown')
     last_menu_msgs[chat_id] = sent.message_id
-    delayed_delete(chat_id, sent.message_id, delay=180)
+    # Главное меню НЕ удаляем автоматически
     logger.info(f"/start от {chat_id}")
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -190,62 +190,69 @@ def handle_callbacks(call):
     chat_id = call.message.chat.id
     data = call.data
    
-    # Удаляем старое сообщение
-    try:
-        bot.delete_message(chat_id, call.message.message_id)
-    except:
-        pass
+    # Удаляем старое сообщение (кроме главного меню)
+    if call.message.message_id != last_menu_msgs.get(chat_id):
+        try:
+            bot.delete_message(chat_id, call.message.message_id)
+        except:
+            pass
    
-    if data == "search_match":
+    if data == "main_menu":
+        start(call.message)  # возвращаемся в главное меню
+   
+    elif data == "search_match":
         text = (
-            "🔍 *Введите запрос*\n\n"
-            "Примеры:\n"
+            "🔍 *Что ищем?*\n\n"
+            "Пиши свободно:\n"
             "• Барселона последний матч\n"
-            "• Лейкерс ближайший\n"
-            "• Зенит сегодня\n"
-            "• Биатлон крайний старт"
+            "• Зенит ближайший\n"
+            "• Лейкерс сегодня\n"
+            "• Биатлон вчера\n"
+            "• ПСЖ против Реала"
         )
         sent = bot.send_message(chat_id, text, parse_mode='Markdown')
         delayed_delete(chat_id, sent.message_id, delay=90)
    
     elif data == "about_bot":
         text = (
-            "🌟 *PulseForge* — спортивный бот\n\n"
-            "⚡ Живые результаты\n"
-            "📊 Аналитика и форма\n"
-            "📈 Графики команд\n"
-            "🚫 Без рекламы и ставок\n\n"
-            "Для фанатов спорта! 🔥"
+            "🌟 *PulseForge* — твой спортивный друг\n\n"
+            "⚡ Результаты в реальном времени\n"
+            "📊 Форма команд и статистика\n"
+            "📈 Графики и прогнозы\n"
+            "🚫 Никаких ставок и рекламы\n\n"
+            "Пользуйся с удовольствием! 🔥"
         )
         sent = bot.send_message(chat_id, text, parse_mode='Markdown')
         delayed_delete(chat_id, sent.message_id, delay=90)
    
-    elif data.startswith("sport_"):
-        sport = data.split('_')[1]
-        state = get_user_state(chat_id)
-        state['sport'] = sport
-        save_user_state(chat_id, state)
-       
-        markup = InlineKeyboardMarkup(row_width=2)
-        regions = ['europe', 'america', 'asia', 'africa', 'international']
-        for r in regions:
-            markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
-        add_back_button(markup, "back_to_start")
-       
-        text = f"🌍 *Выберите регион* для **{sport.capitalize()}**"
-        sent = bot.send_message(chat_id, text, reply_markup=markup, parse_mode='Markdown')
-        last_menu_msgs[chat_id] = sent.message_id
+    elif data == "choose_sport":
+        text = (
+            "🏟️ *Какой вид спорта интересует?*\n\n"
+            "Напиши название (можно любое):\n\n"
+            "Популярные варианты:\n"
+            "• Футбол\n"
+            "• Баскетбол\n"
+            "• Хоккей\n"
+            "• Теннис\n"
+            "• Биатлон\n"
+            "• Волейбол\n"
+            "• Киберспорт\n"
+            "• Формула-1\n"
+            "• UFC / MMA\n\n"
+            "Пиши прямо сейчас — бот запомнит и будет показывать матчи именно по этому виду спорта!"
+        )
+        sent = bot.send_message(chat_id, text, parse_mode='Markdown')
         delayed_delete(chat_id, sent.message_id, delay=180)
    
     elif data == "popular_fixtures":
-        text = "📈 *Популярные матчи сегодня (сезон 2025)*\n\n"
+        text = "📈 *Популярные матчи сегодня*\n\n"
         popular = [
-            ("football", "Premier League", 39, 2025),
-            ("football", "La Liga", 140, 2025),
-            ("basketball", "NBA", 12, 2025),
+            ("football", "Premier League", 39),
+            ("football", "La Liga", 140),
+            ("basketball", "NBA", 12),
         ]
-        for sport, league_name, league_id, season in popular:
-            fixtures = api_request(sport, 'fixtures', {'league': league_id, 'season': season, 'date': datetime.now().strftime('%Y-%m-%d')})
+        for sport, league_name, league_id in popular:
+            fixtures = api_request(sport, 'fixtures', {'league': league_id, 'date': datetime.now().strftime('%Y-%m-%d')})
             if fixtures:
                 text += f"**{league_name}**\n"
                 for fx in fixtures[:3]:
@@ -257,46 +264,60 @@ def handle_callbacks(call):
         sent = bot.send_message(chat_id, text or "Сегодня нет популярных матчей", parse_mode='Markdown')
         delayed_delete(chat_id, sent.message_id, delay=180)
    
-    # Для остальных кнопок (region_, country_, league_, back_*) — добавь обработку по аналогии
     bot.answer_callback_query(call.id)
 
 @bot.message_handler(content_types=['text'])
 def text_search(message):
     query = message.text.strip()
-    if len(query) < 3:
-        sent = bot.reply_to(message, "❌ Минимум 3 символа")
-        delayed_delete(message.chat.id, sent.message_id, delay=30)
-        return
-   
     chat_id = message.chat.id
     state = get_user_state(chat_id)
+   
+    # Проверка: пользователь выбрал спорт
+    simple_sports = ['футбол', 'баскетбол', 'хоккей', 'теннис', 'биатлон', 'волейбол', 'киберспорт', 'формула 1', 'ufc', 'mma', 'бейсбол', 'крикет', 'гольф']
+    if len(query.split()) <= 3 and query.lower() in simple_sports:
+        sport = query.lower()
+        state['sport'] = sport
+        save_user_state(chat_id, state)
+        sent = bot.reply_to(message, f"Отлично! Теперь основной спорт — **{sport.capitalize()}** 🔥\n\nЧто ищем дальше?")
+        delayed_delete(chat_id, sent.message_id, delay=60)
+        return
+   
+    # Обычный поиск
+    if len(query) < 3:
+        sent = bot.reply_to(message, "❌ Минимум 3 символа")
+        delayed_delete(chat_id, sent.message_id, delay=30)
+        return
+   
     sport = state.get('sport') or 'football'
    
     logger.info(f"Поиск: '{query}' ({sport}) от {chat_id}")
    
     loading = bot.reply_to(message, f"🔍 Ищу '{query}'... ⏳")
-    delayed_delete(chat_id, loading.message_id, delay=15)
+    delayed_delete(chat_id, loading.message_id, delay=10)
    
     groq_prompt = f"""
-Пользователь ищет спортивную информацию. Запрос: {query}. Вид спорта: {sport}.
+Ты парсер спортивных запросов. Запрос: "{query}". Вид спорта: {sport}.
 
-Верни ТОЛЬКО JSON без любого текста вне скобок. Без markdown. Без ```json. Без пояснений.
+Верни ТОЛЬКО чистый JSON без текста вне скобок. Без markdown. Без ```.
 
 Структура:
 {{
   "teams": ["команда1", "команда2"] или [],
-  "leagues": ["лига1", "лига2"] или [],
+  "leagues": ["лига1"] или [],
   "match_query": "Барселона vs Реал" или null,
-  "date_filter": "today" или "tomorrow" или "yesterday" или "live" или null,
-  "fixture_type": "last" или "next" или "today" или "live" или null,
-  "sport": "football" или "basketball" или null
+  "date_filter": "today" | "tomorrow" | "yesterday" | "live" | null,
+  "fixture_type": "last" | "next" | "today" | "live" | null,
+  "sport": "{sport}" | null
 }}
 
 Правила:
-- Если про последний/крайний матч — fixture_type: "last"
-- Если про ближайший — "next"
-- Если про сегодняшний — "today"
-- ONLY JSON. Начинай с {{ и заканчивай }}. НИЧЕГО БОЛЬШЕ.
+- "последний", "крайний", "прошлый" → fixture_type: "last"
+- "ближайший", "следующий" → "next"
+- "сегодня", "живой" → "today" или "live"
+- Русские названия понимай (Барселона = Barcelona, Зенит = Zenit)
+- Если непонятно — пустые массивы и null
+
+ТОЛЬКО JSON. Начинай с {{ и заканчивай }}.
 """
    
     groq_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -346,8 +367,9 @@ def text_search(message):
                 items = [{'name': t.get('team', {}).get('name', 'Unknown'), 'id': t.get('team', {}).get('id', '')} for t in teams_data[:5] if t.get('team')]
                 if items:
                     markup = create_inline_markup(items, "team_search", per_row=1)
+                    add_main_menu_button(markup)
                     result = bot.reply_to(message, f"🏟️ Найденные команды по «{team_name}»:", reply_markup=markup, parse_mode='Markdown')
-                    delayed_delete(chat_id, result.message_id, delay=120)
+                    delayed_delete(chat_id, result.message_id, delay=300)
                     found = True
                     break
    
@@ -362,7 +384,7 @@ def text_search(message):
         if team_name:
             teams_data = api_request(sport, 'teams', {'search': team_name})
             if not teams_data or not teams_data[0].get('team'):
-                bot.reply_to(message, f"Команда «{team_name}» не найдена. Попробуй английское название (Barcelona, Zenit).")
+                bot.reply_to(message, f"Команда «{team_name}» не найдена 😔\nПопробуй английское название или уточни.")
                 return
            
             team_id = teams_data[0]['team'].get('id')
@@ -393,28 +415,10 @@ def text_search(message):
                     text += f"{date} {time} | {home} {score} {away} ({status})\n"
                
                 result = bot.reply_to(message, text, parse_mode='Markdown')
-                delayed_delete(chat_id, result.message_id, delay=180)
+                delayed_delete(chat_id, result.message_id, delay=300)
                 found = True
             else:
                 bot.reply_to(message, f"Матчи для «{team_name}» ({fixture_type}) не найдены.")
    
     if not found:
-        bot.reply_to(message, "🔍 Ничего не нашёл...\n\nПопробуй:\n• По-английски\n• Уточни спорт\n• 'последний', 'ближайший', 'сегодня'")
-
-# ====================== POLLING ======================
-if __name__ == '__main__':
-    try:
-        webhook_info = bot.get_webhook_info()
-        if webhook_info.url:
-            logger.info(f"Удаляем webhook: {webhook_info.url}")
-            bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        logger.warning(f"Webhook ошибка: {e}")
-    
-    try:
-        bot.delete_webhook(drop_pending_updates=True)
-    except:
-        pass
-   
-    logger.info("Polling запущен")
-    bot.polling(none_stop=True, interval=1, timeout=35, long_polling_timeout=35)
+        bot.reply_to(message, "🔍 Ничего не нашёл...\n\nПопробуй:\n• Уточни название\n• Пиши по-русски или по-английски\n• 'последний', 'ближайший', 'сегодня'")
