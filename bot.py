@@ -256,30 +256,28 @@ def choose_country(call):
     
     logger.info(f"Выбрана страна: {country} для спорта {sport} от chat_id={chat_id}")
     
-    # Запрос лиг с сезоном 2024 (актуальные данные)
+    # Запрос лиг (сезон 2024 — актуальные данные)
     leagues = api_request(sport, 'leagues', {'country': country, 'season': 2024})
     
     if not leagues:
-        bot.edit_message_text(
-            "Лиги не найдены для этой страны или сезона. Попробуй другой регион или спорт.",
+        bot.send_message(
             chat_id,
-            call.message.message_id
+            "Лиги не найдены для этой страны или сезона. Попробуй другой регион или спорт."
         )
         logger.info(f"Лиги не найдены для {country} / {sport}")
         return
     
-    # Первые 10 лиг
+    # Первые 10 лиг (можно больше)
     items = [{'name': l['league']['name'], 'id': l['league']['id']} for l in leagues[:10]]
     markup = create_inline_markup(items, "league", per_row=1)
     add_back_button(markup, "back_to_country")
     
-    bot.edit_message_text(
-        f"Выбери лигу в {country.capitalize()}:",
+    bot.send_message(
         chat_id,
-        call.message.message_id,
+        f"Выбери лигу в {country.capitalize()}:",
         reply_markup=markup
     )
-    logger.info(f"Показаны лиги для страны {country}")
+    logger.info(f"Отправлены лиги для страны {country} (новое сообщение)")
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_start")
 def back_to_start(call):
