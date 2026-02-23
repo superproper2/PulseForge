@@ -260,40 +260,36 @@ def text_search(message):
    
     logger.info(f"AI-поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
    
-    bot.reply_to(message, f"Ищу по '{query}'... ⏳")
+    loading = bot.reply_to(message, f"🔍 Ищу по '{query}'... ⏳")
+    delayed_delete(chat_id, loading.message_id, delay=15)
    
     groq_prompt = f"""
 Пользователь ищет спортивную информацию.
 Запрос: "{query}"
-Текущий выбранный вид спорта в боте: {sport}
+Текущий вид спорта: {sport}
 
-Верни ТОЛЬКО валидный JSON, без лишнего текста, без markdown, без ```json:
+Верни ТОЛЬКО JSON:
 {{
   "teams": ["команда1", "команда2"] или [],
   "leagues": ["лига1"] или [],
-  "match_query": "матч Барселона vs Реал" или null,
-  "date_filter": "today" или "tomorrow" или "yesterday" или "live" или null,
-  "fixture_type": "last" или "next" или "live" или "today" или null,
-  "sport": "football" или "basketball" или null
+  "match_query": "Барселона vs Реал" или null,
+  "date_filter": "today" | "tomorrow" | "yesterday" | "live" | null,
+  "fixture_type": "last" | "next" | "today" | "live" | null,
+  "sport": "{sport}" | null
 }}
-Если не понятно — верни пустые массивы и null.
+Если запрос про последний/крайний матч — fixture_type: "last"
+Если про следующий — "next"
+Если непонятно — пустые массивы и null.
 """
+   
     groq_url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+   
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {
-                "role": "system",
-                "content": "Ты точный парсер спортивных запросов. Отвечай исключительно JSON-объектом, без единого слова вне структуры."
-            },
-            {
-                "role": "user",
-                "content": groq_prompt
-            }
+            {"role": "system", "content": "Ты точный парсер. Только JSON, без слов вне структуры."},
+            {"role": "user", "content": groq_prompt}
         ],
         "temperature": 0.2,
         "max_tokens": 300,
@@ -301,14 +297,75 @@ def text_search(message):
     }
    
     try:
-        r = requests.post(groq_url, json=payload, headers=headers, timeout=10)
+        r = requests.post(groq_url, json=payload, headers=headers, timeout=12)
         r.raise_for_status()
-        response = r.json().get('response', {})
-        logger.info(f"Grok вернул {len(response)} элементов для {endpoint}")
-        return response
+        response_text = r.json()['choices'][0]['message']['content'].strip()
+        
+        if response_text.startswith("```json"):
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif response_text.startswith("```"):
+            response_text = response_text.split("```")[1].strip()
+        
+        groq_response = json.loads(response_text)
     except Exception as e:
-        logger.error(f"Ошибка запроса API: {e}")
-        return []
+        logger.error(f"Groq ошибка: {e}")
+        sent = bot.reply_to(message, "😔 Ошибка ИИ-поиска. Попробуй позже.")
+        delayed_delete(chat_id, sent.message_id, delay=30)
+        return
+   
+    found = False
+   
+    # ... (твой старый код для teams и leagues остается без изменений)
+   
+    # Новый блок для матчей (last/next/today)
+    if groq_response.get('fixture_type') or groq_response.get('teams') or groq_response.get('match_query'):
+        # Берем первую команду из teams или из match_query
+        team_name = groq_response.get('teams', [None])[0] or groq_response.get('match_query', '').split(' vs ')[0]
+        fixture_type = groq_response.get('fixture_type') or 'today'
+       
+        if team_name:
+            # 1. Находим ID команды по имени
+            teams_data = api_request(sport, 'teams', {'search': team_name})
+            if not teams_data:
+                sent = bot.reply_to(message, f"Команда '{team_name}' не найдена 😔")
+                delayed_delete(chat_id, sent.message_id, delay=30)
+                return
+           
+            team_id = teams_data[0]['team']['id']  # берем первую совпавшую
+           
+            # 2. Запрос последних/ближайших матчей
+            params = {'team': team_id}
+            if fixture_type == 'last':
+                params['last'] = 5  # последние 5 матчей
+                params['status'] = 'FT'  # finished
+            elif fixture_type == 'next':
+                params['next'] = 5  # ближайшие 5
+            elif fixture_type == 'today':
+                params['date'] = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+           
+            fixtures = api_request(sport, 'fixtures', params)
+           
+            if fixtures:
+                text = f"📅 *Матчи* команды **{team_name}** ({fixture_type.capitalize()}):\n\n"
+                for fx in fixtures[:5]:
+                    date = fx['fixture']['date'][:10]
+                    time = fx['fixture']['date'][11:16]
+                    home = fx['teams']['home']['name']
+                    away = fx['teams']['away']['name']
+                    score = f"{fx['goals']['home']}–{fx['goals']['away']}" if fx['goals']['home'] is not None else "?"
+                    status = fx['fixture']['status']['short']
+                    text += f"{date} {time} | {home} {score} {away} ({status})\n"
+               
+                result = bot.reply_to(message, text, parse_mode='Markdown')
+                delayed_delete(chat_id, result.message_id, delay=180)
+                found = True
+            else:
+                sent = bot.reply_to(message, f"Матчи для '{team_name}' ({fixture_type}) не найдены 😔")
+                delayed_delete(chat_id, sent.message_id, delay=60)
+   
+    if not found:
+        sent = bot.reply_to(message, "🔍 Ничего не нашёл... Попробуй по-английски или уточни запрос (Барселона последний матч, Лейкерс следующий).")
+        delayed_delete(chat_id, sent.message_id, delay=90)
 
 # ====================== HANDLERS ======================
 @bot.message_handler(commands=['start', 'help'])
