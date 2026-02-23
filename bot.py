@@ -145,9 +145,9 @@ def start(message):
     
     welcome = (
         "PulseForge активирован\n\n"
-        "Результаты матчей, аналитика, прогнозы и графики формы команд\n"
+        "Результаты матчей, аналитика, прогнозы и графики формы команд.\n"
         "Здесь нет ставок — только чистая информация о спорте\n\n"
-        "Выбери вид спорта:"
+        "Выбери вид спорта или сразу ищи матч:"
     )
     
     markup = InlineKeyboardMarkup(row_width=2)
@@ -160,10 +160,23 @@ def start(message):
     for txt, cb in sports:
         markup.add(InlineKeyboardButton(txt, callback_data=cb))
     
+    # НОВАЯ КНОПКА — Поиск матча
+    markup.add(InlineKeyboardButton("🔍 Поиск матча", callback_data="search_match"))
+    
     markup.add(InlineKeyboardButton("О PulseForge", callback_data="about_bot"))
     
     bot.send_message(chat_id, welcome, reply_markup=markup)
     logger.info(f"/start от chat_id={chat_id}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "search_match")
+def search_match(call):
+    chat_id = call.message.chat.id
+    bot.edit_message_text(
+        "Напиши название команды, лиги или матча (например, Барселона, Премьер-лига, NBA сегодня):",
+        chat_id,
+        call.message.message_id
+    )
+    logger.info(f"Пользователь зашёл в поиск от chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "about_bot")
 def about_bot(call):
