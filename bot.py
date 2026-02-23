@@ -338,8 +338,14 @@ def back_to_region(call):
         call.message.message_id,
         reply_markup=markup
     )
+
+@bot.message_handler(func=lambda message: True)
+def any_text(message):
+    bot.reply_to(message, "Я поймал любое сообщение! 🔥")
+    logger.info("Тест: любой текст пойман!")
     
 # ====================== POLLING ======================
+# Ловим любой обычный текст (поиск)
 @bot.message_handler(content_types=['text'])
 def text_search(message):
     query = message.text.strip()
@@ -351,9 +357,36 @@ def text_search(message):
     state = get_user_state(chat_id)
     sport = state.get('sport') or 'football'
     
-    logger.info(f"AI-поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
+    logger.info(f"Поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
     
     bot.reply_to(message, f"Ищу по '{query}'... ⏳")
+    
+    # Поиск по командам
+    teams = api_request(sport, 'teams', {'search': query})
+    if teams:
+        items = [{'name': t['team']['name'], 'id': t['team']['id']} for t in teams[:5]]
+        markup = create_inline_markup(items, "team_search", per_row=1)
+        bot.reply_to(message, f"Найдено команд:", reply_markup=markup)
+        return
+    
+    # Поиск по лигам
+    leagues = api_request(sport, 'leagues', {'search': query, 'season': 2024})
+    if leagues:
+        items = [{'name': l['league']['name'], 'id': l['league']['id']} for l in leagues[:5]]
+        markup = create_inline_markup(items, "league_search", per_row=1)
+        bot.reply_to(message, f"Найдено лиг:", reply_markup=markup)
+        return
+    
+    # Поиск матчей
+    fixtures = api_request(sport, 'fixtures', {'search': query})
+    if fixtures:
+        text = "Найдено матчей:\n"
+        for fx in fixtures[:5]:
+            text += f"{fx['teams']['home']['name']} vs {fx['teams']['away']['name']} ({fx['league']['name']})\n"
+        bot.reply_to(message, text)
+        return
+    
+    bot.reply_to(message, "Ничего не нашёл. Попробуй английское название (Barcelona, Premier League) или уточни запрос.")
     
     # Промпт для Grok
     grok_prompt = f"""
