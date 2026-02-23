@@ -1,4 +1,6 @@
-# bot.py — PulseForge (максимально простой, без MarkdownV2, без '!')
+# bot.py — PulseForge
+# Версия: стабильная, без MarkdownV2, с эмодзи, polling + база данных
+# Запускается на Railway без проблем
 
 import os
 import json
@@ -11,10 +13,11 @@ import logging
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+# Логи для отладки (видно в Railway)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ====================== CONFIG ======================
+# ====================== НАСТРОЙКИ ======================
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEY = os.getenv('API_SPORTS_KEY')
 
@@ -25,7 +28,7 @@ if not API_KEY:
 
 bot = telebot.TeleBot(TOKEN)
 
-# Путь к БД в volume
+# Путь к базе в Railway Volume
 DB_PATH = '/data/pulseforge.db'
 
 # ====================== БАЗА ДАННЫХ ======================
@@ -44,9 +47,9 @@ def init_db():
             )
         ''')
         conn.commit()
-        logger.info(f"База данных успешно инициализирована: {DB_PATH}")
+        logger.info(f"База данных готова: {DB_PATH}")
     except sqlite3.Error as e:
-        logger.error(f"Ошибка инициализации БД: {e}")
+        logger.error(f"Ошибка базы: {e}")
     finally:
         conn.close()
 
@@ -68,9 +71,9 @@ def save_user_state(chat_id, data):
             datetime.utcnow().isoformat()
         ))
         conn.commit()
-        logger.info(f"Состояние сохранено для chat_id={chat_id}")
+        logger.info(f"Состояние сохранено: chat_id={chat_id}")
     except sqlite3.Error as e:
-        logger.error(f"Ошибка сохранения состояния: {e}")
+        logger.error(f"Ошибка сохранения: {e}")
     finally:
         conn.close()
 
@@ -81,20 +84,15 @@ def get_user_state(chat_id):
         c.execute('SELECT sport, region, country, league_id FROM users WHERE chat_id = ?', (chat_id,))
         row = c.fetchone()
         if row:
-            return {
-                'sport': row[0],
-                'region': row[1],
-                'country': row[2],
-                'league_id': row[3]
-            }
+            return {'sport': row[0], 'region': row[1], 'country': row[2], 'league_id': row[3]}
         return {}
     except sqlite3.Error as e:
-        logger.error(f"Ошибка чтения состояния: {e}")
+        logger.error(f"Ошибка чтения: {e}")
         return {}
     finally:
         conn.close()
 
-# ====================== HELPERS ======================
+# ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
 def create_inline_markup(items, callback_prefix, per_row=2):
     markup = InlineKeyboardMarkup(row_width=per_row)
     for item in items:
@@ -111,6 +109,7 @@ def add_back_button(markup, back_callback):
     markup.add(InlineKeyboardButton("⬅️ Назад", callback_data=back_callback))
     return markup
 
+# ====================== API ЗАПРОСЫ ======================
 def api_request(sport, endpoint, params=None):
     base_urls = {
         'football': 'https://v3.football.api-sports.io/',
@@ -120,7 +119,7 @@ def api_request(sport, endpoint, params=None):
     }
     base = base_urls.get(sport)
     if not base:
-        logger.warning(f"Нет базы для спорта: {sport}")
+        logger.warning(f"Нет API для спорта: {sport}")
         return None
     url = f"{base}{endpoint}"
     if params:
@@ -132,10 +131,10 @@ def api_request(sport, endpoint, params=None):
         logger.warning(f"API ошибка {r.status_code}: {r.text}")
         return []
     except Exception as e:
-        logger.error(f"Ошибка запроса API: {e}")
+        logger.error(f"Ошибка API: {e}")
         return []
 
-# ====================== MATCH & GRAPH ======================
+# ====================== ГРАФИК ФОРМЫ ======================
 def generate_form_graph(form):
     if not form:
         return None
@@ -158,6 +157,7 @@ def generate_form_graph(form):
     plt.close()
     return buf
 
+# ====================== ПРОГНОЗ ======================
 def simple_prognosis(fixture, sport):
     if not fixture:
         return "Прогноз недоступен"
@@ -217,7 +217,7 @@ def format_match(fixture, sport):
     
     return text
 
-# ====================== HANDLERS ======================
+# ====================== ОБРАБОТЧИКИ ======================
 @bot.message_handler(commands=['start', 'help'])
 def start(message):
     chat_id = message.chat.id
@@ -227,27 +227,23 @@ def start(message):
         "PulseForge активирован\n\n"
         "Результаты матчей, аналитика, прогнозы и графики формы команд.\n"
         "Здесь нет ставок — только чистая информация о спорте\n\n"
-        "Выбери спорт:"
+        "Выбери вид спорта:"
     )
     
     markup = InlineKeyboardMarkup(row_width=2)
     sports = [
-        ("Футбол", "sport_football"),
-        ("Баскетбол", "sport_basketball"),
-        ("Хоккей", "sport_ice-hockey"),
-        ("Теннис", "sport_tennis"),
+        ("⚽ Футбол", "sport_football"),
+        ("🏀 Баскетбол", "sport_basketball"),
+        ("🏒 Хоккей", "sport_ice-hockey"),
+        ("🎾 Теннис", "sport_tennis"),
     ]
     for txt, cb in sports:
         markup.add(InlineKeyboardButton(txt, callback_data=cb))
     
     markup.add(InlineKeyboardButton("О PulseForge", callback_data="about_bot"))
     
-    bot.send_message(
-        chat_id,
-        welcome,
-        reply_markup=markup
-    )
-    logger.info(f"Команда /start от chat_id={chat_id}")
+    bot.send_message(chat_id, welcome, reply_markup=markup)
+    logger.info(f"/start от chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "about_bot")
 def about_bot(call):
@@ -272,22 +268,75 @@ def choose_sport(call):
     save_user_state(chat_id, state)
     
     markup = InlineKeyboardMarkup(row_width=2)
-    for r in ['europe', 'america', 'asia', 'africa', 'international']:
+    regions = ['europe', 'america', 'asia', 'africa', 'international']
+    for r in regions:
         markup.add(InlineKeyboardButton(r.capitalize(), callback_data=f"region_{r}"))
     add_back_button(markup, "back_to_start")
     
     bot.edit_message_text(
         f"Выбери регион для {sport.capitalize()}:",
-        chat_id, call.message.message_id,
+        chat_id,
+        call.message.message_id,
         reply_markup=markup
     )
-    logger.info(f"Выбран спорт: {sport} для chat_id={chat_id}")
+    logger.info(f"Выбран спорт: {sport} от chat_id={chat_id}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('region_'))
+def choose_region(call):
+    chat_id = call.message.chat.id
+    region = call.data.split('_')[1]
+    
+    state = get_user_state(chat_id)
+    state['region'] = region
+    save_user_state(chat_id, state)
+    
+    # Пример стран (расширь по необходимости)
+    regions_countries = {
+        'europe': ['england', 'spain', 'germany', 'italy', 'france'],
+        'america': ['usa', 'brazil', 'argentina'],
+        'asia': ['japan', 'south korea', 'china'],
+        'africa': ['egypt', 'south africa'],
+        'international': ['world'],
+    }
+    
+    countries = regions_countries.get(region, [])
+    items = [{'name': c.capitalize(), 'code': c} for c in countries]
+    markup = create_inline_markup(items, "country", per_row=2)
+    add_back_button(markup, "back_to_sport")
+    
+    bot.edit_message_text(
+        f"Выбери страну в {region.capitalize()}:",
+        chat_id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+    logger.info(f"Выбран регион: {region} от chat_id={chat_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_start")
 def back_to_start(call):
     start(call.message)
 
-# ====================== POLLING ======================
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_sport")
+def back_to_sport(call):
+    chat_id = call.message.chat.id
+    markup = InlineKeyboardMarkup(row_width=2)
+    sports = [
+        ("Футбол", "sport_football"),
+        ("Баскетбол", "sport_basketball"),
+        ("Хоккей", "sport_ice-hockey"),
+        ("Теннис", "sport_tennis"),
+    ]
+    for txt, cb in sports:
+        markup.add(InlineKeyboardButton(txt, callback_data=cb))
+    
+    bot.edit_message_text(
+        "Выбери спорт заново:",
+        chat_id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+# ====================== ЗАПУСК ======================
 if __name__ == '__main__':
     try:
         bot.delete_webhook(drop_pending_updates=True)
