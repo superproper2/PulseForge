@@ -509,14 +509,24 @@ def text_search(message):
 
 # ====================== POLLING ======================
 if __name__ == '__main__':
-    try:
+try:
+    current_webhook = bot.get_webhook_info()
+    if current_webhook.url:
+        logger.info(f"Webhook был активен: {current_webhook.url} — удаляем")
         bot.delete_webhook(drop_pending_updates=True)
-        logger.info("Webhook удалён, запускаем polling")
-    except Exception as e:
-        logger.warning(f"Ошибка удаления webhook: {e}")
+    else:
+        logger.info("Webhook не активен — ок")
+except Exception as e:
+    logger.warning(f"Ошибка проверки webhook: {e}")
+    
+try:
+    bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Webhook удалён, запускаем polling")
+except Exception as e:
+    logger.warning(f"Ошибка удаления webhook: {e}")
    
-    logger.info("Polling запущен — бот должен отвечать мгновенно")
-    bot.polling(none_stop=True, interval=0, timeout=20)
+logger.info("Polling запущен — бот должен отвечать мгновенно")
+bot.polling(none_stop=True, interval=0, timeout=20)
 
     if not found:
         bot.reply_to(message, "Ничего подходящего не нашёл.\n\nПопробуй:\n• написать по-английски (Barcelona vs Real, NBA Lakers)\n• указать лигу или дату\n• уточнить вид спорта")
