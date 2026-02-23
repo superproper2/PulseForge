@@ -246,7 +246,6 @@ def popular_fixtures(call):
     logger.info(f"Показаны популярные матчи для {chat_id}")
 
 # Добавь аналогично для других callback
-
 @bot.message_handler(content_types=['text'])
 def text_search(message):
     query = message.text.strip()
@@ -260,45 +259,32 @@ def text_search(message):
    
     logger.info(f"AI-поиск по '{query}' для спорта {sport} от chat_id={chat_id}")
    
-    bot.reply_to(message, f"Ищу по '{query}'... ⏳")
+    loading_msg = bot.reply_to(message, f"Ищу по '{query}'... ⏳")
+    delayed_delete(chat_id, loading_msg.message_id, delay=15)
    
-    # Улучшенный system prompt с примерами
-    system_prompt = """
-Ты парсер спортивных запросов. Возвращай ТОЛЬКО валидный JSON, без единого слова вне структуры, без markdown, без ```json, без объяснений, без пробелов вне JSON.
-JSON всегда должен начинаться с { и заканчиваться }.
+    # Улучшенный промпт — без внутренних кавычек, которые ломали синтаксис
+    groq_prompt = f"""
+Пользователь ищет спортивную информацию. Запрос: {query}. Вид спорта: {sport}.
 
-Пример 1: Запрос "Барселона vs Реал"
-JSON: {"teams": ["Барселона", "Реал"], "leagues": [], "match_query": "Барселона vs Реал", "date_filter": null, "fixture_type": null, "sport": "football"}
+Верни ТОЛЬКО валидный JSON без любого текста вне скобок. Без markdown. Без ```json. Без пояснений. Без пробелов вне JSON.
 
-Пример 2: Запрос "последний матч Лейкерс"
-JSON: {"teams": ["Лейкерс"], "leagues": [], "match_query": null, "date_filter": null, "fixture_type": "last", "sport": "basketball"}
-
-Пример 3: Запрос "биатлон сегодня"
-JSON: {"teams": [], "leagues": [], "match_query": null, "date_filter": "today", "fixture_type": null, "sport": "biathlon"}
-
-CRITICAL: ONLY JSON. NO EXTRA TEXT.
-"""
-   
-    user_prompt = f"""
-Пользователь ищет спортивную информацию.
-Запрос: "{query}"
-Текущий вид спорта: {sport}
-
-Верни ТОЛЬКО JSON с полями:
+Структура:
 {{
   "teams": ["команда1", "команда2"] или [],
-  "leagues": ["лига1"] или [],
-  "match_query": "матч Барселона vs Реал" или null,
-  "date_filter": "today" | "tomorrow" | "yesterday" | "live" | null,
-  "fixture_type": "last" | "next" | "today" | "live" | null,
-  "sport": "football" | "basketball" | "ice-hockey" | "tennis" | null
+  "leagues": ["лига1", "лига2"] или [],
+  "match_query": "Барселона vs Реал" или null,
+  "date_filter": "today" или "tomorrow" или "yesterday" или "live" или null,
+  "fixture_type": "last" или "next" или "today" или "live" или null,
+  "sport": "football" или "basketball" или "ice-hockey" или "tennis" или null
 }}
-Если запрос про последний/крайний матч — fixture_type: "last"
-Если про следующий/ближайший — "next"
-Если про биатлон или другой спорт — sport: "biathlon" (или название)
-Если непонятно — пустые массивы и null.
 
-ONLY JSON. NO EXTRA TEXT. START WITH { AND END WITH }.
+Правила:
+- Если запрос про последний/крайний/прошедший матч — fixture_type: "last"
+- Если про ближайший/следующий — "next"
+- Если про сегодняшний/живой — "today" или "live"
+- Если про конкретный матч — заполни match_query
+- Если непонятно или не про спорт — пустые массивы и null
+- ONLY JSON. Начинай с {{ и заканчивай }}. НИЧЕГО БОЛЬШЕ.
 """
    
     groq_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -310,67 +296,76 @@ ONLY JSON. NO EXTRA TEXT. START WITH { AND END WITH }.
     payload = {
         "model": "llama-3.3-70b-versatile",
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {
+                "role": "system",
+                "content": "Ты строгий парсер. Возвращай ТОЛЬКО JSON. Без слов. Без markdown. Без комментариев. Без лишних пробелов. Только объект от { до }."
+            },
+            {
+                "role": "user",
+                "content": groq_prompt
+            }
         ],
-        "temperature": 0.2,
+        "temperature": 0.15,  # ещё ниже для максимальной стабильности
         "max_tokens": 400,
         "stream": False
     }
    
-    max_retries = 2
+    groq_response = {"teams": [], "leagues": [], "match_query": None, "date_filter": None, "fixture_type": None, "sport": None}
+   
+    max_retries = 3
     for attempt in range(max_retries):
         try:
             r = requests.post(groq_url, json=payload, headers=headers, timeout=12)
             r.raise_for_status()
-           
             response_text = r.json()['choices'][0]['message']['content'].strip()
            
-            logger.info(f"Groq response (attempt {attempt+1}): {response_text[:400]}...")
+            logger.info(f"Groq raw (попытка {attempt+1}): {response_text[:300]}...")
            
-            # Дополнительный чистинг: удаляем всё, кроме JSON
-            if response_text.startswith('{'):
-                response_text = response_text[response_text.find('{'):]  # отсекаем до первого {
-            if response_text.endswith('}'):
-                response_text = response_text[:response_text.rfind('}')+1]  # до последнего }
+            # Мощная чистка ответа — убираем всё, что не JSON
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+            if start_idx == -1 or end_idx == 0:
+                raise ValueError("Нет JSON в ответе")
            
-            groq_response = json.loads(response_text)
-            break  # Успех — выходим
-        except json.JSONDecodeError:
-            logger.error(f"Groq вернул невалидный JSON (attempt {attempt+1}): {response_text}")
-            if attempt < max_retries - 1:
-                continue  # Retry
-            groq_response = {"teams": [], "leagues": [], "match_query": None, "date_filter": None, "fixture_type": None, "sport": None}
-            bot.reply_to(message, "ИИ вернул некорректный ответ. Попробуй перефразировать.")
-        except Exception as e:
-            logger.exception("Ошибка Groq:")
-            bot.reply_to(message, "Что-то пошло не так с ИИ 😔")
-            return
+            clean_json = response_text[start_idx:end_idx]
+            groq_response = json.loads(clean_json)
+            break  # успех — выходим из цикла
+       
+        except (json.JSONDecodeError, ValueError, requests.exceptions.HTTPError) as e:
+            logger.error(f"Ошибка Groq (попытка {attempt+1}): {e}")
+            if attempt == max_retries - 1:
+                bot.reply_to(message, "ИИ вернул некорректный ответ. Попробуй перефразировать запрос.")
+                return
    
-    # Обработка ответа (твой код + фиксы)
+    # Дальше твоя обработка ответа (teams, leagues, fixtures)
     found = False
-    # ... (твой старый код для teams, leagues)
    
-    # Блок для матчей
+    if groq_response.get('teams'):
+        # ... (твой код для поиска команд)
+   
+    # Блок для матчей (last/next/today) — улучшенный и безопасный
     if not found and (groq_response.get('fixture_type') or groq_response.get('match_query') or groq_response.get('teams')):
-        # Берем команду
-        team_name = groq_response.get('teams', [None])[0] or groq_response.get('match_query', '').split(' vs ')[0].strip()
+        team_name = groq_response.get('teams', [None])[0]
+        if not team_name and groq_response.get('match_query'):
+            team_name = groq_response.get('match_query', '').split(' vs ')[0].strip()
+       
         fixture_type = groq_response.get('fixture_type') or 'today'
        
         if team_name:
             teams_data = api_request(sport, 'teams', {'search': team_name})
-            if not teams_data:
-                bot.reply_to(message, f"Команда '{team_name}' не найдена. Попробуй английское название (Barcelona, Zenit).")
+            if not teams_data or not teams_data[0].get('team'):
+                bot.reply_to(message, f"Команда «{team_name}» не найдена. Попробуй английское название.")
                 return
            
-            team_id = teams_data[0].get('team', {}).get('id')  # безопасно
+            team_id = teams_data[0]['team'].get('id')
             if not team_id:
-                bot.reply_to(message, f"ID команды '{team_name}' не найден в ответе API.")
+                bot.reply_to(message, f"ID команды не найден в ответе API.")
                 return
            
             params = {'team': team_id}
             if fixture_type == 'last':
                 params['last'] = 5
+                params['status'] = 'FT'
             elif fixture_type == 'next':
                 params['next'] = 5
             elif fixture_type == 'today':
@@ -379,17 +374,24 @@ ONLY JSON. NO EXTRA TEXT. START WITH { AND END WITH }.
             fixtures = api_request(sport, 'fixtures', params)
            
             if fixtures:
-                text = f"Матчи команды {team_name} ({fixture_type}):\n\n"
-                for fx in fixtures:
-                    text += f"{fx['fixture']['date']} - {fx['teams']['home']['name']} vs {fx['teams']['away']['name']} ({fx['goals']['home']}:{fx['goals']['away']})\n"
-                bot.reply_to(message, text)
+                text = f"Матчи команды **{team_name}** ({fixture_type.capitalize()}):\n\n"
+                for fx in fixtures[:5]:
+                    date = fx['fixture']['date'][:10]
+                    time = fx['fixture']['date'][11:16]
+                    home = fx['teams']['home']['name']
+                    away = fx['teams']['away']['name']
+                    score = f"{fx['goals']['home']}–{fx['goals']['away']}" if fx['goals']['home'] is not None else "?"
+                    status = fx['fixture']['status']['short']
+                    text += f"{date} {time} | {home} {score} {away} ({status})\n"
+               
+                result = bot.reply_to(message, text, parse_mode='Markdown')
+                delayed_delete(chat_id, result.message_id, delay=180)
                 found = True
             else:
-                bot.reply_to(message, f"Матчи для '{team_name}' ({fixture_type}) не найдены.")
+                bot.reply_to(message, f"Матчи для «{team_name}» ({fixture_type}) не найдены.")
    
     if not found:
-        bot.reply_to(message, "Ничего не нашёл. Попробуй 'Барселона последний матч' или английский.")
-
+        bot.reply_to(message, "Ничего не нашёл. Попробуй:\n• По-английски (Barcelona last match)\n• Уточни вид спорта\n• Используй 'последний', 'ближайший'")
 # ====================== POLLING ======================
 if __name__ == '__main__':
     try:
